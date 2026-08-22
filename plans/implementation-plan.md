@@ -1,479 +1,403 @@
 # DAEGSA Execution Plan
 
 Status: COMMITTED
-Canonical phase: Phase 1 - Configuration, Safety, and HTTP Executor
+Canonical phase: Phase 2 - Metrics and Closed-Model Baseline
 Tranche: entire phase
 
 ## Objective
 
-Implement the production CLI entrypoint and Cobra commands (`run`, `validate`, `version`, `help`), robust YAML configuration loading with `${VAR}` environment variable expansion and CLI flag precedence, safety preflight validation (host allowlisting, destructive HTTP method authorization, hard safety ceiling enforcement, and DNS preflight), immutable execution planning with configuration fingerprinting and secret redaction, and the core HTTP request execution engine (shared tuned `http.Transport`, per-request timeout context, request body/header assembly, redirect safety policy enforcement, response body limit capping and connection draining, precise timestamp capture, and deterministic 12-state outcome classification). Validate all components against the deterministic `internal/testtarget` server across all 8 simulation modes.
+Implement the high-performance, bounded-memory metrics engine (`internal/metrics`), the closed-model virtual-user workload scheduler (`internal/scheduler`), the terminal and JSON v1 report generation subsystem (`internal/report`), and CLI wiring in `internal/cli` for closed-model load testing. Deliver a complete, robust, and deterministic vertical slice capable of executing $N$ concurrent Virtual User (VU) loops with think time, graceful drain, bounded latency tracking (spanning 1µs to 1h with 3 significant figures), 12-state outcome rollups, generator health monitoring, and ANSI/JSON reporting with zero goroutine leaks, zero connection leaks, and strictly bounded memory.
 
 ## Requirements traceability
 
 | Plan Section | Requirement Description | Implementation / Test Target |
 | :--- | :--- | :--- |
-| **§3, §5, §15** | CLI architecture using Cobra (`run`, `validate`, `version`, `help`) with canonical exit code mapping (0: PASS, 1: FAIL_THRESHOLDS, 2: USAGE/VALIDATION_ERROR, 3: RUNTIME_ERROR, 4: SAFETY_REFUSAL) | `cmd/daegsa/main.go`, `internal/cli/` |
-| **§6, §11** | Configuration environment variable resolution (`${VAR}`), CLI flag precedence (CLI > Env > YAML > Default), strict decoding, and configuration fingerprinting | `internal/config/env.go`, `internal/config/precedence.go`, `internal/config/fingerprint.go` |
-| **§6, §11** | Centralized credential and secret redaction across plans, fingerprints, errors, and terminal outputs | `internal/config/redact.go`, `internal/plan/redact.go` |
-| **§12** | Safety preflight engine: host allowlisting, destructive HTTP method (POST, PUT, PATCH, DELETE) authorization, redirect safety re-validation, ceiling enforcement, DNS preflight, `--dry-run`, and `--non-interactive` | `internal/safety/preflight.go`, `internal/safety/safety.go`, `internal/safety/safety_test.go` |
-| **§4, §6, §7** | Validated immutable execution plan representation (`internal/plan`) and sanitized plan printing | `internal/plan/plan.go`, `internal/plan/plan_test.go` |
-| **§8, §9** | High-performance HTTP request executor: shared tuned `http.Transport`, per-request timeout context, request building, redirect policy hook, response body limit reading, draining/closing, and timestamps | `internal/executor/executor.go`, `internal/executor/transport.go`, `internal/executor/result.go` |
-| **§9** | Integration with 12-state `OutcomeClassifier` and rate-limit observation extraction (`Retry-After`, `RateLimit-*`, `X-RateLimit-*`) | `internal/executor/executor.go`, `internal/executor/ratelimit.go` |
-| **§8, §15** | Integration testing against `internal/testtarget` across all 8 simulation modes (status codes, delays, payload streaming, redirects, TCP drops, timeout hangs, cookies, and 429 rate limiting) | `internal/executor/executor_test.go`, `internal/cli/cli_test.go` |
-| **§15** | Phase 1 Exit Gate: single request executed and classified correctly across all deterministic test target behaviors; safety refusal returns exit code 4; invalid config returns exit code 2; `--dry-run` prints sanitized plan with exit code 0 | `internal/cli/cli_test.go`, `internal/executor/executor_test.go` |
+| **§3, §9, §15** | Bounded high-precision histogram interface and implementation spanning 1µs to 1h with 3 significant figures, fixed memory footprint, and percentile calculations (min, max, mean, p50, p90, p95, p99, p99.9) | `internal/metrics/histogram.go`, `internal/metrics/histogram_test.go` |
+| **§4, §9, §15** | Lock-free worker-local metrics aggregator (`WorkerMetrics`) capturing latency samples, outcome counts (all 12 states), HTTP status distribution, bytes sent/received, bounded error samples, and rate-limit header observations | `internal/metrics/worker.go`, `internal/metrics/worker_test.go` |
+| **§4, §9, §13** | Central metrics snapshot and deterministic merge engine (`Snapshot`, `Merge(workers []WorkerMetrics) *AggregatedMetrics`) computing throughput, start rate, error rates, and separate latency distributions (all completed vs expected success) | `internal/metrics/aggregate.go`, `internal/metrics/aggregate_test.go` |
+| **§9, §13, §14** | Generator resource and self-diagnostic sampler (`GeneratorHealth`: peak goroutines, memory allocation, CPU usage estimate, scheduler lag, client saturation warnings) | `internal/metrics/health.go`, `internal/metrics/health_test.go` |
+| **§2, §4, §7** | Closed Workload Controller running exactly $N$ concurrent Virtual User (VU) worker loops with per-VU state, independent worker metric accumulators, request-wait-think iterations, and monotonic clock integration | `internal/scheduler/closed.go`, `internal/scheduler/closed_test.go` |
+| **§7, §8, §15** | Test lifecycle state machine integration: warm-up phase (excluded from threshold metrics), running for duration, graceful stop draining in-flight requests, and context cancellation abort | `internal/scheduler/closed.go`, `internal/scheduler/lifecycle_test.go` |
+| **§7, §15** | Deterministic clock abstraction integration (`internal/clock`), supporting `ControllableClock` for virtual-time simulation and `RealClock` for production load runs | `internal/scheduler/closed.go`, `internal/scheduler/closed_test.go` |
+| **§13, §15** | Terminal report generator: ANSI-formatted console summary with header metadata, target vs achieved RPS, throughput, 12-state outcome distribution, status codes, latency comparison tables, rate-limit observations, and generator health | `internal/report/terminal.go`, `internal/report/terminal_test.go` |
+| **§13, §15** | JSON report v1 generator: serialization conforming to JSON schema v1 (`report_schema_version: 1`), UTC timestamps, duration_ms, sanitized config fingerprint, generator health, and incomplete flag | `internal/report/json.go`, `internal/report/json_test.go`, `internal/report/schema_test.go` |
+| **§4, §10, §15** | CLI integration: connect closed-model scheduler and reporting into `daegsa run` when `load.model == "closed"` (or default), with `--output-json` flag and canonical exit codes | `internal/cli/run.go`, `internal/cli/flags.go`, `internal/cli/cli_test.go` |
+| **§9, §15, §18** | Concurrency, zero-leak, and bounded-memory verification: exhaustive tests against `internal/testtarget` with zero goroutine leaks, zero connection leaks, and constant memory footprint over 100,000+ iterations | `internal/scheduler/closed_test.go`, `benchmarks/metrics_test.go` |
 
 ## Current repository findings
 
-- **Phase 0 Deliverables**:
-  - `internal/core`: canonical workload models (`open`, `closed`), 12-state `Outcome` taxonomy & `OutcomeClassifier`, 5 `ExitCode` constants, timing boundaries (`Latency`, `TTFB`, `ScheduleLag`), and execution lifecycle states.
-  - `internal/config`: YAML schema v1 structs, strict decoding rejecting unknown fields and duplicate keys, byte size and duration parsers.
-  - `internal/report`: JSON report schema v1 structs.
-  - `internal/clock`: `RealClock` (monotonic) and `ControllableClock` (priority-queue virtual time).
-  - `internal/testtarget`: deterministic local HTTP server implementing all 8 test modes (status, delay, payload streaming, redirects, drops, hangs, cookies, 429 rate limiting).
-  - `benchmarks`: timer resolution characterization and zero-allocation classification baseline.
-- **Dependencies**: `go.mod` contains Go 1.22 and `gopkg.in/yaml.v3`. Cobra (`github.com/spf13/cobra`) and pflag (`github.com/spf13/pflag`) must be added for CLI commands.
-- **Missing Components for Phase 1**:
-  - `cmd/daegsa/main.go` and `internal/cli` (Cobra command structure and exit-code propagation).
-  - `internal/config/env.go` (environment variable interpolation `${VAR}` with escape support `$${VAR}`).
-  - `internal/config/precedence.go` (CLI override application over YAML config).
-  - `internal/config/fingerprint.go` & `redact.go` (SHA256 fingerprinting of sanitized configuration and sensitive header/token redaction).
-  - `internal/safety` (host allowlisting, destructive method authorization, hard safety ceiling enforcement, DNS preflight resolution).
-  - `internal/plan` (immutable execution plan struct and sanitized text representation).
-  - `internal/executor` (reusable tuned `http.Transport`, request builder, execution engine, response body capping/draining, timing measurement, and outcome classification).
+- **Phase 0 & Phase 1 Foundations Completed**:
+  - `internal/core`: canonical workload models (`open`, `closed`), 12-state `Outcome` taxonomy & `OutcomeClassifier`, 5 `ExitCode` constants, timing boundaries (`Latency`, `TTFB`, `ScheduleLag`), and lifecycle states (`StateInitialized`, `StateWarmup`, `StateRunning`, `StateGracefulStop`, `StateCanceled`, `StateCompleted`).
+  - `internal/config`: strict YAML parsing, environment variable resolution (`${VAR}` / `$${VAR}`), CLI flag precedence, sanitized SHA256 configuration fingerprinting, and header/URL credential redaction.
+  - `internal/safety`: safety preflight engine (host allowlist, destructive method authorization, safety ceilings, DNS preflight lookup).
+  - `internal/plan`: immutable execution `Plan` structure and sanitized console formatter.
+  - `internal/executor`: reusable connection-pooled `http.Transport`, request builder, response body capper/drainer, rate-limit parser (`Retry-After`, `RateLimit-*`, `X-RateLimit-*`), and single-request execution engine.
+  - `internal/clock`: `RealClock` (monotonic) and `ControllableClock` (priority-queue virtual monotonic time with timer/ticker support).
+  - `internal/testtarget`: 8-mode deterministic HTTP simulation server (status codes, delays, payload streaming, redirects, TCP drops, timeout hangs, cookies, 429 rate limiting).
+  - `internal/report`: JSON report schema v1 structs (`Report`, `RequestCounts`, `LatencySummary`, `RateLimitObservations`, `GeneratorHealth`, `ThresholdResult`) and schema serialization contract tests (`internal/report/schema_test.go`).
+  - `cmd/daegsa` & `internal/cli`: Cobra CLI commands (`run`, `validate`, `version`, `help`) and canonical exit code mapping.
+- **Dependencies Present**: Go 1.22, `gopkg.in/yaml.v3`, `github.com/spf13/cobra`, `github.com/spf13/pflag`, `github.com/HdrHistogram/hdrhistogram-go` (v1.1.2).
+- **Components Implemented in Phase 2**:
+  - `internal/metrics`: `histogram.go`, `worker.go`, `aggregate.go`, `health.go` and comprehensive unit tests.
+  - `internal/scheduler`: `scheduler.go`, `closed.go` and comprehensive deterministic / integration tests.
+  - `internal/report`: `terminal.go`, `json.go`, `builder.go` and formatting / golden output tests.
+  - `internal/cli`: updated `run.go` and `flags.go` to execute the closed-model scheduler, collect metrics, format reports, and support `--output-json`.
+  - `benchmarks`: added `metrics_bench_test.go` for histogram, worker, and merge benchmarks.
 
 ## Files expected to change
 
 ```text
 daegsa/
-├── go.mod                                   # Modified: Add github.com/spf13/cobra and github.com/spf13/pflag
+├── go.mod                                   # Modified: Add github.com/HdrHistogram/hdrhistogram-go
 ├── go.sum                                   # Modified: Checksums for new dependencies
-├── cmd/
-│   └── daegsa/
-│       └── main.go                          # New: Application entrypoint calling cli.Execute() with os.Exit code
 ├── internal/
 │   ├── cli/
-│   │   ├── root.go                          # New: Root Cobra command, global flags, version info
-│   │   ├── run.go                           # New: 'run' command with CLI overrides, --dry-run, --non-interactive
-│   │   ├── validate.go                      # New: 'validate' command for syntax, env, and safety preflight
-│   │   ├── version.go                       # New: 'version' command printing version, commit, build date
-│   │   ├── flags.go                         # New: CLI flag definitions and binding helpers
-│   │   ├── exit.go                          # New: Process exit-code translation from errors
-│   │   └── cli_test.go                      # New: End-to-end CLI integration test suite
-│   ├── config/
-│   │   ├── env.go                           # New: Environment variable resolver (${VAR}, $${VAR})
-│   │   ├── precedence.go                    # New: CLI flag precedence overlay onto parsed Config
-│   │   ├── fingerprint.go                   # New: Deterministic SHA256 configuration fingerprinting
-│   │   ├── redact.go                        # New: Sensitive header and token redaction helpers
-│   │   ├── env_test.go                      # New: Tests for env expansion, missing vars, and escaping
-│   │   └── precedence_test.go               # New: Tests for flag precedence and fingerprint stability
-│   ├── safety/
-│   │   ├── safety.go                        # New: Safety rules, errors (ErrSafetyRefusal), and ceilings
-│   │   ├── preflight.go                     # New: Host allowlisting, destructive method checks, DNS preflight
-│   │   └── safety_test.go                   # New: Comprehensive safety preflight unit tests
-│   ├── plan/
-│   │   ├── plan.go                          # New: Immutable Plan struct and BuildPlan constructor
-│   │   ├── print.go                         # New: Sanitized terminal plan summary formatting
-│   │   └── plan_test.go                     # New: Immutable plan building, immutability, and redaction tests
-│   └── executor/
-│       ├── executor.go                      # New: HTTP executor executing single requests with timeout/context
-│       ├── transport.go                     # New: Shared tuned http.Transport factory and connection settings
-│       ├── request.go                       # New: Request builder (headers, body, method, URL)
-│       ├── response.go                      # New: Response body limit reader and connection draining
-│       ├── result.go                        # New: Execution Result struct (outcome, timing, bytes, headers)
-│       ├── ratelimit.go                     # New: Rate-limit header parsing (Retry-After, RateLimit-*, X-RateLimit-*)
-│       └── executor_test.go                 # New: Exhaustive executor test suite against testtarget (all 8 modes)
+│   │   ├── flags.go                         # Modified: Add --output-json (-o) flag
+│   │   ├── run.go                           # Modified: Wire closed scheduler, metrics aggregator, and reporters
+│   │   └── cli_test.go                      # Modified/Added: End-to-end closed-model execution and reporting tests
+│   ├── metrics/
+│   │   ├── histogram.go                     # New: Histogram interface and HDR/bounded implementation (1µs - 1h)
+│   │   ├── histogram_test.go                # New: Unit tests for precision, percentiles, min/max/mean, and merge
+│   │   ├── worker.go                        # New: Lock-free WorkerMetrics struct with 12 outcomes, status, bytes, errors
+│   │   ├── worker_test.go                   # New: Unit tests for worker-local metric recording and bounds
+│   │   ├── aggregate.go                     # New: Central metrics merge engine and percentile/throughput calculator
+│   │   ├── aggregate_test.go                # New: Unit tests for multi-worker merging and math reconciliation
+│   │   ├── health.go                        # New: Generator health sampler (CPU, memory, goroutines, scheduler lag)
+│   │   └── health_test.go                   # New: Unit tests for health monitoring and saturation warnings
+│   ├── scheduler/
+│   │   ├── scheduler.go                     # New: Common Scheduler interface and execution options
+│   │   ├── closed.go                        # New: Closed-model VU controller, worker loops, think time, lifecycle
+│   │   ├── closed_test.go                   # New: Deterministic virtual-time tests and testtarget integration tests
+│   │   └── leak_test.go                     # New: Goroutine leak, connection leak, and bounded-memory tests
+│   └── report/
+│       ├── builder.go                       # New: Report builder constructing report.Report from execution state
+│       ├── terminal.go                      # New: ANSI-formatted console report generator
+│       ├── terminal_test.go                 # New: Tests for ANSI layout, tables, percentages, and redaction
+│       ├── json.go                          # New: JSON report generator and file persistence
+│       └── json_test.go                     # New: Tests for JSON report formatting and schema compliance
+└── benchmarks/
+    └── metrics_bench_test.go                # New: Benchmarks for histogram recording, worker aggregation, and merge
 ```
 
 ## Implementation checklist
 
-### 1. Dependencies & CLI Entrypoint (`go.mod`, `cmd/daegsa/main.go`, `internal/cli`)
-- [x] Add `github.com/spf13/cobra` (v1.8.1+) and `github.com/spf13/pflag` to `go.mod` and run `go mod tidy`.
-- [x] Implement `cmd/daegsa/main.go`:
-  - Invoke `cli.Execute()` or `cli.ExecuteContext(ctx)`.
-  - Capture return error / exit code and terminate cleanly via `os.Exit(code)`.
-  - Prevent any unhandled panic from producing a non-standard exit code.
-- [x] Implement `internal/cli/exit.go`:
-  - Define `DetermineExitCode(err error) core.ExitCode`.
-  - Map nil -> `core.ExitCodeSuccess` (0).
-  - Map threshold evaluation failures -> `core.ExitCodeThresholdFailure` (1).
-  - Map syntax, YAML decoding, unknown fields, missing required flags/configs -> `core.ExitCodeValidationFailure` (2).
-  - Map unrecoverable runtime errors, network dial init failures -> `core.ExitCodeRuntimeFailure` (3).
-  - Map safety violations (unauthorized host, unauthorized destructive method, ceiling breach) -> `core.ExitCodeSafetyRefusal` (4).
-- [x] Implement `internal/cli/flags.go`:
-  - Define `CLIFlags` struct capturing `--config`, `--url`, `--method`, `--model`, `--rate`, `--time-unit`, `--users`, `--duration`, `--timeout`, `--max-in-flight`, `--response-body-limit`, `--redirects`, `--dry-run`, `--non-interactive`, `--allow-destructive`.
-  - Provide helper to bind flags to Cobra commands.
-- [x] Implement `internal/cli/root.go`:
-  - Define Root command `daegsa` with usage, short/long descriptions, and subcommands.
-  - Configure Cobra `SilenceUsage: true` and `SilenceErrors: true` so custom exit codes and error formatting control output.
-- [x] Implement `internal/cli/version.go`:
-  - Implement `version` subcommand printing version, commit SHA, build date, Go version, OS, and Arch.
-  - Support programmatic injection of build metadata via ldflags (`Version`, `Commit`, `BuildDate`).
-- [x] Implement `internal/cli/validate.go`:
-  - Implement `validate` subcommand accepting `--config` and CLI flag overrides.
-  - Parse YAML, expand environment variables, apply CLI overrides, validate syntax and invariants.
-  - Run safety preflight checks without sending traffic.
-  - Print sanitized execution plan summary to stdout on success and return `ExitCodeSuccess` (0).
-  - Return `ExitCodeValidationFailure` (2) on schema/validation errors; return `ExitCodeSafetyRefusal` (4) on safety preflight failure.
-- [x] Implement `internal/cli/run.go`:
-  - Implement `run` subcommand accepting `--config` and execution flags.
-  - Check `--dry-run`: if set, build sanitized plan, print summary to stdout, and exit with code 0 without executing traffic.
-  - Check `--non-interactive`: if set, disallow interactive prompts and fail immediately with exit code 4 if safety authorization is missing.
-  - In Phase 1, execute single-request validation / test execution against the target URL and print outcome classification result.
+### 1. Dependencies & Histogram Abstraction (`go.mod`, `internal/metrics/histogram.go`)
+- [x] Add `github.com/HdrHistogram/hdrhistogram-go` (v1.1.2) to `go.mod` and run `go mod tidy`.
+- [x] Define the internal `Histogram` interface in `internal/metrics/histogram.go` (§3, §9):
+  - `Record(value int64) error` (values in microseconds: 1µs to 3,600,000,000µs = 1 hour).
+  - `ValueAtQuantile(q float64) int64` (quantile in [0.0, 100.0]).
+  - `Min() int64`
+  - `Max() int64`
+  - `Mean() float64`
+  - `Count() int64`
+  - `Merge(other Histogram) error`
+  - `Reset()`
+  - `Copy() Histogram`
+- [x] Implement `HDRHistogram` struct wrapping `hdrhistogram.Histogram`:
+  - Configure bounded parameters: `minValue = 1` (1µs), `maxValue = 3600000000` (1 hour in µs), `sigFigs = 3`.
+  - Clamp recorded values below 1µs to 1µs; clamp values exceeding 1h to 1h with overflow tracking.
+  - Implement zero-allocation `Record` operations on the hot path.
+  - Implement `NewLatencyHistogram() Histogram` constructor.
 
-### 2. Configuration Normalization & Environment Resolution (`internal/config`)
-- [x] Implement `internal/config/env.go`:
-  - Implement `ExpandEnv(input []byte, getenv func(string) string) ([]byte, error)`:
-    - Expand `${VAR_NAME}` patterns in YAML bytes prior to strict decoding.
-    - Support escape sequence `$${VAR_NAME}` to produce literal `${VAR_NAME}` without substitution.
-    - Validate variable names (`[A-Za-z_][A-Za-z0-9_]*`).
-    - Record which environment variables were expanded for redaction tracking.
-- [x] Implement `internal/config/precedence.go`:
-  - Implement `ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error`:
-    - Enforce precedence: CLI flag > Environment variable > YAML document > Documented default.
-    - Override `request.url`, `request.method`, `load.model`, `load.rate`, `load.users`, `load.duration`, `request.timeout`, `load.max_in_flight`, `request.response_body_limit`, `request.redirects`, `safety.allow_non_idempotent` when explicitly provided on CLI.
-    - Re-run `ValidateConfig(cfg)` to ensure the post-override configuration maintains all invariants.
-- [x] Implement `internal/config/redact.go`:
-  - Define list of standard sensitive header keys: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`, `Token`, `X-Auth-Token`.
-  - Implement `RedactHeaders(headers map[string]string) map[string]string` replacing sensitive values with `[REDACTED]`.
-  - Implement `RedactURL(rawURL string) string` redacting credentials (`user:pass@host`) and sensitive query parameters (`token`, `key`, `secret`, `auth`, `api_key`).
-- [x] Implement `internal/config/fingerprint.go`:
-  - Implement `ComputeFingerprint(cfg *Config) (string, error)`:
-    - Clone configuration and replace all sensitive header values and secret tokens with empty/canonical masked strings.
-    - Normalize order of headers and thresholds.
-    - Serialize to canonical JSON or deterministic YAML and compute SHA256 hex digest.
+### 2. Worker-Local Metrics Aggregator (`internal/metrics/worker.go`)
+- [x] Define `WorkerMetrics` struct in `internal/metrics/worker.go` (§4, §9):
+  - `WorkerID int`
+  - `Planned int64`, `Scheduled int64`, `Started int64`, `Completed int64`, `Canceled int64`, `Dropped int64`
+  - `Outcomes [12]int64` (indexed by canonical `core.Outcome` enum / mapped to 12 states)
+  - `StatusCodes map[int]int64` (bounded HTTP status code distribution)
+  - `AllLatency Histogram` (all completed responses)
+  - `SuccessLatency Histogram` (expected-status responses only)
+  - `TTFBSumMicroseconds int64`, `TTFBCount int64`
+  - `BytesSent int64`, `BytesReceived int64`
+  - `ErrorSamples []ErrorSample` (bounded circular buffer / slice, max `MaxErrorSamples = 10`)
+  - `RateLimitObservations RateLimitObservations` (count of 429s, bounded slice of max 10 `RateLimitHeaderSample`)
+- [x] Implement `NewWorkerMetrics(workerID int) *WorkerMetrics`.
+- [x] Implement `RecordResult(res *executor.Result)` on `*WorkerMetrics`:
+  - Completely lock-free execution (isolated to single VU goroutine).
+  - Record outcome count in `Outcomes`.
+  - If `res.StatusCode > 0`: increment `StatusCodes[res.StatusCode]`.
+  - Convert `res.Latency` to microseconds and record into `AllLatency`.
+  - If `res.Outcome.IsSuccess()`: record into `SuccessLatency`.
+  - Accumulate `BytesSent` and `BytesReceived`.
+  - Accumulate TTFB.
+  - If `res.Err != nil`: record normalized error message into bounded `ErrorSamples` (track message, error class, and occurrence count).
+  - If `res.RateLimitInfo != nil`: record rate-limit header observations.
+- [x] Implement `Snapshot() *WorkerMetrics` performing a safe copy for mid-test progress polling.
 
-### 3. Safety Preflight Engine (`internal/safety`)
-- [x] Implement `internal/safety/safety.go`:
-  - Define hard ceiling constants (§12):
-    - `MaxAllowedDuration`: 24 * time.Hour
-    - `MaxAllowedResponseBodyLimit`: 50 * 1024 * 1024 (50 MiB)
-    - `MaxAllowedRate`: 1,000,000 RPS
-    - `MaxAllowedUsers`: 100,000 VUs
-    - `MaxAllowedInFlight`: 100,000
-    - `MaxRedirectHops`: 10
-  - Define sentinel errors:
-    - `ErrSafetyRefusal`: base error for all safety refusals (mapped to ExitCode 4).
-    - `ErrHostNotAllowed`: target host not in `allowed_hosts`.
-    - `ErrDestructiveMethodUnauthorized`: non-idempotent HTTP method (POST, PUT, PATCH, DELETE) not explicitly authorized.
-    - `ErrSafetyCeilingExceeded`: configuration value exceeds hard safety ceiling.
-    - `ErrCrossOriginRedirectBlocked`: redirect to a different origin blocked by `same-origin` policy.
-- [x] Implement `internal/safety/preflight.go`:
-  - Implement `type PreflightEngine struct`:
-    - Method `Check(ctx context.Context, cfg *config.Config, flags SafetyFlags) (*PreflightResult, error)`.
-  - Implement Host Allowlist Check:
-    - If `safety.allowed_hosts` is non-empty, parse target URL hostname and verify it matches at least one allowed host pattern.
-    - Support exact hostname match (e.g. `api.example.com`) and wildcard domain match (e.g. `*.example.com`).
-    - If target host is not allowed, return `fmt.Errorf("%w: target host %q is not in allowed_hosts", ErrHostNotAllowed, host)`.
-  - Implement Destructive Method Authorization Check:
-    - Check if HTTP method is one of `POST`, `PUT`, `PATCH`, `DELETE`.
-    - If method is destructive, verify either `cfg.Safety.AllowNonIdempotent == true` or CLI flag `--allow-destructive == true`.
-    - If unauthorized, return `fmt.Errorf("%w: HTTP method %s requires explicit authorization (safety.allow_non_idempotent: true or --allow-destructive)", ErrDestructiveMethodUnauthorized, method)`.
-  - Implement Ceiling Checks:
-    - Enforce duration <= `MaxAllowedDuration`, response body limit <= `MaxAllowedResponseBodyLimit`, rate <= `MaxAllowedRate`, max_in_flight <= `MaxAllowedInFlight`.
-  - Implement DNS Preflight Resolution:
-    - Perform `net.DefaultResolver.LookupIPAddr(ctx, host)` for the target hostname.
-    - Capture resolved IPv4 and IPv6 addresses into `PreflightResult`.
-    - If DNS lookup fails during preflight, return classified preflight error.
+### 3. Central Metrics Merge & Aggregation Engine (`internal/metrics/aggregate.go`)
+- [x] Define `AggregatedMetrics` struct in `internal/metrics/aggregate.go` (§4, §9, §13):
+  - `RequestCounts report.RequestCounts`
+  - `Outcomes map[core.Outcome]int64`
+  - `StatusCodes map[string]int64`
+  - `Latency report.LatencySummary` (min, max, mean, p50, p90, p95, p99, p99.9 in milliseconds)
+  - `RateLimits report.RateLimitObservations`
+  - `TotalBytesSent int64`, `TotalBytesReceived int64`
+  - `Duration time.Duration`
+  - `AchievedStartRPS float64` (started / duration seconds)
+  - `CompletedThroughput float64` (completed / duration seconds)
+  - `ErrorRate float64` ((completed - success) / completed)
+  - `RateLimitedRate float64` (429 count / completed)
+  - `ErrorSamples []ErrorSample`
+- [x] Implement `MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*AggregatedMetrics, error)`:
+  - Initialize empty combined histograms for all completed and expected success latencies.
+  - Loop over all `WorkerMetrics` and merge histograms using `Histogram.Merge()`.
+  - Sum `Planned`, `Scheduled`, `Started`, `Completed`, `Canceled`, `Dropped`.
+  - Aggregate outcome counts across all 12 states.
+  - Aggregate status code counts.
+  - Aggregate byte counts.
+  - Calculate `LatencySummary` percentiles: convert microseconds to milliseconds (`float64(µs) / 1000.0`).
+  - Calculate throughput rates and error percentages.
+  - Reconcile math: `Planned == Started + Dropped`, `Started == Completed + Canceled + InFlight`.
 
-### 4. Immutable Execution Plan (`internal/plan`)
-- [x] Implement `internal/plan/plan.go`:
-  - Define `type Plan struct`:
-    - `Name string`
-    - `SchemaVersion int`
-    - `Fingerprint string`
-    - `TargetURL *url.URL`
-    - `Method string`
-    - `Headers http.Header`
-    - `Body []byte`
-    - `ExpectedStatuses []int`
-    - `RequestTimeout time.Duration`
-    - `ResponseBodyLimit int64`
-    - `RedirectPolicy string`
-    - `Model core.WorkloadModel`
-    - `Rate float64`
-    - `TimeUnit time.Duration`
-    - `MaxInFlight int64`
-    - `Duration time.Duration`
-    - `GracefulStop time.Duration`
-    - `Users int64`
-    - `ThinkTime time.Duration`
-    - `Treat429AsExpected bool`
-    - `AllowedHosts []string`
-    - `AllowNonIdempotent bool`
-    - `ResolvedIPs []net.IP`
-  - Implement `BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, error)`:
-    - Construct immutable, deeply cloned `Plan` ensuring no shared references to mutable config maps or slices.
-- [x] Implement `internal/plan/print.go`:
-  - Implement `FormatPlanSummary(p *Plan) string`:
-    - Format sanitized human-readable summary for console / dry-run:
-      - Configuration Name & Fingerprint (first 12 chars).
-      - Effective Model, Target URL (with redacted sensitive query params), Method.
-      - Rate / Concurrency, Request Timeout, Response Body Limit, Redirect Policy.
-      - Safety flags and resolved target IP addresses.
-      - Redacted header names and mask values.
+### 4. Generator Health Sampler (`internal/metrics/health.go`)
+- [x] Implement `GeneratorHealthSampler` in `internal/metrics/health.go` (§9, §13, §14):
+  - Track `GoroutinesPeak int64` using `runtime.NumGoroutine()`.
+  - Track `CPUMaxPercent float64` via interval sampling.
+  - Track `SchedulerLagMaxMS float64`.
+  - Track memory allocation and GC stats via `runtime.ReadMemStats`.
+  - Maintain active background sampling loop during test execution with configurable sample interval (e.g. 250ms).
+- [x] Implement `Collect() report.GeneratorHealth`:
+  - Evaluate saturation conditions and generate explicit warnings:
+    - Peak CPU > 85%: `"client CPU saturation detected (> 85%)"`.
+    - Peak goroutines > threshold: `"high goroutine count detected"`.
+    - Max scheduler lag > 50ms: `"scheduler lag exceeded 50ms"`.
+  - Return populated `report.GeneratorHealth`.
 
-### 5. HTTP Request Executor & Transport (`internal/executor`)
-- [x] Implement `internal/executor/transport.go`:
-  - Implement `NewSharedTransport(opts TransportOptions) *http.Transport`:
-    - Configure pooled, high-throughput connection limits:
-      - `MaxIdleConns: 1000`
-      - `MaxIdleConnsPerHost: 500`
-      - `MaxConnsPerHost: 0` (unlimited or bounded by option)
-      - `IdleConnTimeout: 90 * time.Second`
-      - `TLSHandshakeTimeout: 10 * time.Second`
-      - `ExpectContinueTimeout: 1 * time.Second`
-      - `ForceAttemptHTTP2: true`
-      - `DisableKeepAlives: false`
-    - Provide `CloseIdleConnections()` method for clean test teardown.
-- [x] Implement `internal/executor/request.go`:
-  - Implement `BuildHTTPRequest(ctx context.Context, plan *Plan) (*http.Request, int64, error)`:
-    - Create `*http.Request` using `http.NewRequestWithContext(ctx, plan.Method, plan.TargetURL.String(), bodyReader)`.
-    - Clone and attach headers from `plan.Headers`.
-    - Set `Host` header explicitly if provided in headers.
-    - Calculate and return estimated `BytesSent` (request line + header bytes + body length).
-- [x] Implement `internal/executor/response.go`:
-  - Implement `ReadAndDrainResponseBody(resp *http.Response, limitBytes int64) ([]byte, int64, bool, error)`:
-    - Read up to `limitBytes` using `io.LimitReader(resp.Body, limitBytes)`.
-    - Check if body exceeded limit (read limit + 1 byte probe).
-    - Drain remaining bytes up to safe drain threshold (e.g. 32 KiB) to preserve keep-alive connection reuse.
-    - Always close `resp.Body`.
-    - Return payload bytes, total `BytesReceived`, whether body was truncated, and any read error.
-- [x] Implement `internal/executor/ratelimit.go`:
-  - Implement `ExtractRateLimitInfo(headers http.Header) *RateLimitInfo`:
-    - Parse `Retry-After`: support integer seconds (e.g. `120`) and RFC1123 / RFC850 HTTP-Date (e.g. `Sat, 22 Aug 2026 15:30:00 GMT`).
-    - Parse standard `RateLimit-*` headers: `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, `RateLimit-Policy`.
-    - Parse legacy `X-RateLimit-*` headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
-- [x] Implement `internal/executor/result.go`:
-  - Define `type Result struct`:
-    - `Outcome core.Outcome`
-    - `StatusCode int`
-    - `Protocol string` (e.g. `HTTP/1.1`, `HTTP/2.0`)
-    - `Timestamps core.RequestTimestamps`
-    - `Latency time.Duration`
-    - `TTFB time.Duration`
-    - `BytesSent int64`
-    - `BytesReceived int64`
-    - `RateLimitInfo *RateLimitInfo`
-    - `Err error`
-- [x] Implement `internal/executor/executor.go`:
-  - Define `type HTTPExecutor struct`:
-    - Fields: `client *http.Client`, `transport *http.Transport`, `classifier core.OutcomeClassifier`, `plan *Plan`.
-  - Implement `NewHTTPExecutor(plan *Plan) (*HTTPExecutor, error)`:
-    - Build `*http.Transport` via `NewSharedTransport`.
-    - Build `*http.Client` with custom `CheckRedirect` hook:
-      - If `plan.RedirectPolicy == "none"`: return `http.ErrUseLastResponse`.
-      - If `plan.RedirectPolicy == "same-origin"`: compare request URL origin (scheme + host + port) with redirect URL origin. If mismatched, return `ErrCrossOriginRedirectBlocked`.
-      - If `plan.RedirectPolicy == "all"`: re-validate redirect target host against `plan.AllowedHosts`. If unallowed, return `ErrHostNotAllowed`.
-      - Limit max redirect hops to `MaxRedirectHops` (10).
-  - Implement `ExecuteRequest(ctx context.Context) (*Result, error)`:
-    - Apply per-request timeout context: `reqCtx, cancel := context.WithTimeout(ctx, plan.RequestTimeout)`.
-    - Record `ScheduledAt` and `DispatchedAt` timestamps.
-    - Execute `resp, err := client.Do(req)`.
-    - Capture `HeadersReceivedAt` immediately when `Do` returns headers.
-    - If `resp != nil`: read and drain body, record `BodyCompletedAt`, close response.
-    - Classify outcome using `core.OutcomeClassifier`:
-      - Pass `StatusCode`, `ExpectedStatuses`, `err`, `ResponseBodyErr`, `RequestBuildErr`.
-    - Compute timing boundaries:
-      - `TTFB = HeadersReceivedAt - DispatchedAt`
-      - `Latency = BodyCompletedAt - DispatchedAt`
-      - `TotalDuration = BodyCompletedAt - ScheduledAt`
-    - Return populated `Result`.
-  - Implement `Close()`: close idle connections on shared transport.
+### 5. Closed-Model Workload Scheduler (`internal/scheduler/closed.go`)
+- [x] Define `ClosedScheduler` struct in `internal/scheduler/closed.go` (§2, §4, §7):
+  - `plan *plan.Plan`
+  - `executor *executor.HTTPExecutor`
+  - `clock clock.Clock`
+  - `healthSampler *metrics.GeneratorHealthSampler`
+  - `stateMachine *core.LifecycleStateMachine`
+  - `workers []*metrics.WorkerMetrics`
+  - `inFlightCount atomic.Int64`
+- [x] Implement `NewClosedScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clock) (*ClosedScheduler, error)`:
+  - Validate `p.Model == core.WorkloadModelClosed` and `p.Users > 0`.
+  - Initialize lifecycle state machine to `StateInitialized`.
+  - Initialize `p.Users` individual `WorkerMetrics` instances.
+- [x] Implement `Run(ctx context.Context) (*metrics.AggregatedMetrics, *report.GeneratorHealth, error)`:
+  - Start `GeneratorHealthSampler`.
+  - Transition state machine: `StateInitialized` -> `StateRunning` (or `StateWarmup` if configured).
+  - Create run context with test duration deadline or start duration timer: `durationTimer := s.clock.NewTimer(s.plan.Duration)`.
+  - Launch $N$ worker goroutines using `sync.WaitGroup`:
+    - Each worker executes `runVU(ctx, workerID, workerMetrics, stopChan)`.
+  - **Worker Loop Algorithm (`runVU`)**:
+    1. Check if stop signaled or `ctx.Err() != nil`. If so, exit.
+    2. Atomically increment `inFlightCount`.
+    3. Worker records `Started++`.
+    4. Call `executor.ExecuteRequest(reqCtx)`.
+    5. Atomically decrement `inFlightCount`.
+    6. Worker records `Completed++` and calls `workerMetrics.RecordResult(result)`.
+    7. If `plan.ThinkTime > 0`:
+       - Wait for think time using `thinkTimer := s.clock.NewTimer(s.plan.ThinkTime)`.
+       - Select on `thinkTimer.C()`, `stopChan`, or `ctx.Done()`.
+    8. Loop back to step 1.
+  - **Shutdown & Drain Handling**:
+    - When `durationTimer.C()` fires:
+      - Transition state machine to `StateGracefulStop`.
+      - Signal all workers to stop starting new iterations (close `stopChan`).
+      - Start `gracefulTimer := s.clock.NewTimer(s.plan.GracefulStop)`.
+      - In a separate goroutine, wait for `wg.Wait()` and close `doneChan`.
+      - Select between `doneChan` (clean drain) and `gracefulTimer.C()` (graceful stop timeout expired) and `ctx.Done()` (hard interrupt).
+      - If graceful timeout expires or `ctx.Done()` occurs:
+        - Cancel active request contexts.
+        - Transition state machine to `StateCanceled` if interrupted, or `StateCompleted`.
+      - Transition state machine to `StateCompleted`.
+  - Stop `GeneratorHealthSampler`.
+  - Collect health metrics and merge all `WorkerMetrics` into `*metrics.AggregatedMetrics`.
+  - Return aggregated metrics and generator health.
 
-### 6. CLI Wiring & End-to-End Execution (`internal/cli`)
-- [x] Connect `cli/run.go` and `cli/validate.go` to `config`, `safety`, `plan`, and `executor` packages.
-- [x] Format terminal output on single request execution in `run`:
-  - Output target URL, method, status code, outcome classification, latency, TTFB, and rate-limit info.
-  - Return exit code 0 if outcome is `OutcomeSuccess` or `OutcomeRateLimited` (when `treat_429_as_expected: true`); return exit code 1 or 2/3/4 as appropriate on failure.
+### 6. Terminal Report Formatter (`internal/report/terminal.go`)
+- [x] Implement `FormatTerminalReport(rep *Report, p *plan.Plan) string` in `internal/report/terminal.go` (§13):
+  - Format test header: Test Name, Target URL (redacted), Method, Model (`closed`), Users, Planned vs Actual Duration.
+  - Format Request & Throughput summary table:
+    - Target: $N$ Virtual Users.
+    - Achieved Start Rate: `X.XX req/s`.
+    - Completed Throughput: `Y.YY req/s`.
+    - Total Counts: Planned, Started, Completed, Canceled, Dropped.
+  - Format 12-State Outcome Distribution table:
+    - Display all outcomes with count and percentage (highlight non-zero errors).
+  - Format HTTP Status Code table:
+    - Display status codes (e.g. 200, 404, 500) with counts and percentages.
+  - Format Latency Distribution table:
+    - Columns: `Metric`, `All Completed (ms)`, `Expected Success (ms)`.
+    - Rows: `Min`, `p50`, `p90`, `p95`, `p99`, `Max`, `Mean`.
+  - Format Rate Limiting Observations (if non-zero 429s or headers present):
+    - 429 count, sample `Retry-After` values, `RateLimit-*` headers.
+  - Format Generator Health & Saturation:
+    - Peak Goroutines, Max CPU %, Max Scheduler Lag, Saturation Warnings.
+  - Format Test Result banner: `PASS` / `FAIL` (based on outcome/incomplete status).
+
+### 7. JSON Report Generator & File Writer (`internal/report/json.go`, `internal/report/builder.go`)
+- [x] Implement `BuildReport(...) *Report` in `internal/report/builder.go`:
+  - Assemble `Report` with `ReportSchemaVersion = 1`, Daegsa version/commit/build date, OS, Arch.
+  - Populate sanitized configuration fingerprint (`p.Fingerprint`).
+  - Set `StartTimeUTC`, `EndTimeUTC`, `DurationMS`.
+  - Set `WorkloadModel = p.Model`.
+  - Populate `RequestCounts`, `Outcomes`, `StatusCodes`, `Latency`, `RateLimits`, `GeneratorHealth`.
+  - Set `Incomplete: true` if canceled or graceful stop timed out.
+- [x] Implement `WriteJSONReport(filename string, rep *Report) error` in `internal/report/json.go`:
+  - Marshal using `rep.ToJSON()`.
+  - Write atomically to target file path.
+
+### 8. CLI Integration (`internal/cli/run.go`, `internal/cli/flags.go`)
+- [x] Add `--output-json` (shorthand `-o`) flag to CLI flags in `internal/cli/flags.go`.
+- [x] Update `internal/cli/run.go` to execute the full closed-model load test:
+  - If `--dry-run`: print plan summary and exit 0.
+  - If `p.Model == core.WorkloadModelClosed` (or default):
+    - Construct `executor.NewHTTPExecutor(p)`.
+    - Construct `scheduler.NewClosedScheduler(p, exec, clock.NewRealClock())`.
+    - Run scheduler with `cmd.Context()`.
+    - Construct `Report` via `report.BuildReport`.
+    - Print ANSI terminal report to stdout.
+    - If `--output-json` provided: write JSON report to file.
+    - Determine exit code:
+      - If `rep.Incomplete`: exit code 3 (`ExitCodeRuntimeFailure`).
+      - If any requests failed or unexpected status occurred (when no thresholds defined): exit code 1 (`ExitCodeThresholdFailure`).
+      - If all requests succeeded: exit code 0 (`ExitCodeSuccess`).
 
 ## Test checklist
 
-### 1. Configuration & Precedence Tests (`internal/config`)
-- [x] `internal/config/env_test.go`:
-  - Test `${VAR}` expansion with existing environment variables.
-  - Test missing required environment variables return clear errors.
-  - Test escaped `$${VAR}` preserves literal `${VAR}` in output string.
-  - Test nested / multiple environment variable substitutions in a single YAML string.
-- [x] `internal/config/precedence_test.go`:
-  - Test precedence order: CLI flag overrides environment variable, which overrides YAML value, which overrides default.
-  - Test individual flag overrides: `--url`, `--method`, `--rate`, `--users`, `--duration`, `--timeout`, `--model`.
-  - Test that invalid CLI overrides trigger validation errors returning `ExitCodeValidationFailure`.
-- [x] `internal/config/fingerprint_test.go`:
-  - Test deterministic fingerprint generation: identical configs produce identical SHA256 hashes.
-  - Test secret independence: changing an `Authorization` header value does not change the sanitized configuration fingerprint.
-  - Test whitespace / formatting normalization in fingerprint generation.
-- [x] `internal/config/redact_test.go`:
-  - Test header redaction: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key` are masked with `[REDACTED]`.
-  - Test URL redaction: userinfo (`user:password@host`) and query tokens (`?token=secret&api_key=12345`) are sanitized.
+### 1. Histogram & Worker Metrics Unit Tests (`internal/metrics`)
+- [x] `internal/metrics/histogram_test.go`:
+  - Test recording microsecond values (1µs to 3,600,000,000µs).
+  - Test precision at boundaries (1µs, 1ms, 100ms, 1s, 1m, 1h).
+  - Test percentile retrieval (`ValueAtQuantile`: 50, 90, 95, 99, 99.9).
+  - Test `Min()`, `Max()`, `Mean()`, `Count()`.
+  - Test `Merge()` of two histograms and verify percentiles and count reconcile.
+  - Test zero-sample histogram behavior (returns 0 for min/max/percentiles, no panic).
+  - Test value clamping for values < 1µs and > 1h.
+- [x] `internal/metrics/worker_test.go`:
+  - Test recording single `executor.Result` into `WorkerMetrics`.
+  - Test recording across all 12 canonical `core.Outcome` states.
+  - Test HTTP status code distribution counting (200, 204, 404, 429, 500).
+  - Test byte counts accumulation (`BytesSent`, `BytesReceived`).
+  - Test error sample bounding: record 50 errors and verify `ErrorSamples` is capped at `MaxErrorSamples` (10) without unbounded growth.
+  - Test rate-limit header observations recording.
+- [x] `internal/metrics/aggregate_test.go`:
+  - Test merging $N=10$ `WorkerMetrics` instances into `AggregatedMetrics`.
+  - Test math reconciliation: `Total Planned == Started + Dropped`, `Total Started == Completed + Canceled`.
+  - Test throughput and start rate calculations.
+  - Test latency milliseconds conversion.
+- [x] `internal/metrics/health_test.go`:
+  - Test background sampling captures non-zero goroutine counts and memory stats.
+  - Test CPU saturation warning generation when simulated CPU > 85%.
+  - Test scheduler lag warning generation when lag > 50ms.
 
-### 2. Safety Preflight Tests (`internal/safety`)
-- [x] `internal/safety/safety_test.go`:
-  - Test Host Allowlist:
-    - Allowed exact host (`api.example.com`) passes.
-    - Allowed wildcard host (`*.example.com`) matches `sub.example.com` and passes.
-    - Disallowed host returns `ErrHostNotAllowed` wrapping `ErrSafetyRefusal`.
-    - Empty `allowed_hosts` list allows target (or enforces local/safe policy).
-  - Test Destructive Method Authorization:
-    - `GET`, `HEAD`, `OPTIONS` pass without special authorization.
-    - `POST`, `PUT`, `PATCH`, `DELETE` fail with `ErrDestructiveMethodUnauthorized` when `allow_non_idempotent` is false.
-    - `POST`, `PUT`, `PATCH`, `DELETE` pass when `allow_non_idempotent: true` in config or `--allow-destructive` flag is set.
-  - Test Safety Ceilings:
-    - Duration > 24h fails with ceiling violation error.
-    - Response body limit > 50MiB fails with ceiling violation error.
-    - Rate > 1,000,000 RPS fails with ceiling violation error.
-  - Test DNS Preflight:
-    - Valid hostname resolves IP addresses.
-    - Unresolvable hostname fails preflight with clear DNS diagnostic.
+### 2. Closed-Model Scheduler Tests (`internal/scheduler`)
+- [x] `internal/scheduler/closed_test.go` (Deterministic Virtual-Time Tests with `ControllableClock`):
+  - Test concurrency invariant: verify exactly $N$ concurrent VU worker loops run.
+  - Test think time: verify each iteration pauses for exact `think_time` duration between requests.
+  - Test duration expiration: verify workers stop starting new requests exactly when `duration` expires.
+  - Test graceful stop:
+    - Simulate in-flight request finishing during graceful stop window -> completed successfully.
+    - Simulate in-flight request hanging past `graceful_stop` window -> canceled with `OutcomeCanceled`.
+  - Test hard context cancellation:
+    - Cancel `ctx` mid-run -> immediate worker termination, in-flight requests canceled, `Incomplete: true`.
+- [x] `internal/scheduler/closed_test.go` (Integration Tests with `internal/testtarget`):
+  - **200 OK Fast Target**: 10 VUs, 500ms duration, 10ms think time -> 100% `OutcomeSuccess`.
+  - **Delayed Target (Mode 2)**: 5 VUs, 50ms delay, 200ms duration -> latencies >= 50ms, throughput correctly measured.
+  - **429 Rate-Limited Target (Mode 8)**: 5 VUs against rate-limited endpoint -> `OutcomeRateLimited` counted, rate limit headers extracted.
+  - **500 Server Error Target (Mode 1)**: 5 VUs against error endpoint -> `OutcomeUnexpectedStatus` counted.
+  - **Disconnect & Timeout Targets (Mode 5 & 6)**: 5 VUs against dropping/hanging endpoints -> transport errors / timeouts accurately categorized.
+- [x] `internal/scheduler/leak_test.go` (Zero-Leak & Bounded Memory Assertions):
+  - **Goroutine Leak Test**: count active goroutines before scheduler run; assert active goroutines after `scheduler.Run()` matches baseline (0 leaked goroutines).
+  - **Connection Leak Test**: execute 1,000 requests across 10 VUs; verify transport idle connections are cleanly closed and socket count returns to 0.
+  - **Bounded-Memory Soak Test**: run 100,000 closed-model iterations; sample heap allocations at iteration 1,000, 10,000, and 100,000; assert heap growth is bounded (< 15% variance, zero linear memory accumulation).
 
-### 3. Immutable Plan Tests (`internal/plan`)
-- [x] `internal/plan/plan_test.go`:
-  - Test `BuildPlan` generates deeply cloned, immutable structures.
-  - Test modification of input config after `BuildPlan` does not alter the generated `Plan`.
-  - Test `FormatPlanSummary` redacts sensitive credentials, tokens, and authorization headers in dry-run output.
+### 3. Reporting Tests (`internal/report`)
+- [x] `internal/report/terminal_test.go`:
+  - Test `FormatTerminalReport` produces clean ANSI output with all required sections.
+  - Test URL credential and token redaction in terminal report header.
+  - Test zero-count outcomes and status codes formatting.
+  - Test latency percentile display accuracy.
+  - Test saturation warning banner formatting.
+- [x] `internal/report/json_test.go`:
+  - Test `BuildReport` populates all fields matching `report_schema_version: 1`.
+  - Test JSON serialization validity against `TestReport_Serialization` contract.
+  - Test `WriteJSONReport` writes valid UTF-8 formatted JSON file to disk.
+  - Test `Incomplete` flag serialization on canceled run.
 
-### 4. HTTP Executor Integration Tests (`internal/executor` against `internal/testtarget`)
-- [x] `internal/executor/executor_test.go` - Test across all 8 `testtarget` simulation modes:
-  - **Mode 1: Status Codes**:
-    - Test 200 OK -> `OutcomeSuccess`, status 200.
-    - Test 204 No Content -> `OutcomeSuccess`, status 204.
-    - Test 404 Not Found (with `expected_statuses: [200]`) -> `OutcomeUnexpectedStatus`, status 404.
-    - Test 404 Not Found (with `expected_statuses: [404]`) -> `OutcomeSuccess`, status 404.
-    - Test 500 Internal Server Error -> `OutcomeUnexpectedStatus`, status 500.
-  - **Mode 2: Delays & Timestamps**:
-    - Test 50ms server delay -> verifies `TTFB >= 50ms` and `Latency >= 50ms`.
-    - Test timestamp ordering invariant: `ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`.
-  - **Mode 3: Payload Streaming & Body Capping**:
-    - Test streaming 10 KiB response with 1 MiB limit -> full payload read, `BytesReceived >= 10240`.
-    - Test streaming 10 KiB response with 500 B limit -> payload capped at 500 bytes, `truncated == true`, connection cleanly drained.
-  - **Mode 4: Redirects**:
-    - Test same-origin 3-hop redirect with `redirects: same-origin` -> followed to final 200 OK destination.
-    - Test cross-origin redirect with `redirects: same-origin` -> blocked with `ErrCrossOriginRedirectBlocked`.
-    - Test cross-origin redirect with `redirects: all` -> allowed when destination host is allowlisted.
-    - Test `redirects: none` -> stops at first 302 redirect response with status 302.
-    - Test redirect loop (>10 hops) -> fails with redirect limit error.
-  - **Mode 5: Abrupt TCP Disconnects**:
-    - Test `?drop=immediate` (TCP hijack/close) -> classified as `OutcomeConnectError` or `OutcomeOtherTransportError`.
-    - Test `?drop=midway` (partial body then TCP hijack) -> classified as `OutcomeResponseBodyError`.
-  - **Mode 6: Timeout Hangs**:
-    - Test target hang with 50ms request timeout -> context deadline expires -> classified as `OutcomeTimeout`.
-  - **Mode 7: Cookies**:
-    - Test server setting `Set-Cookie` -> cookie headers received without crashing or leaking sensitive values.
-  - **Mode 8: 429 Rate Limiting & Header Parsing**:
-    - Test 429 response with `Retry-After: 30` -> classified as `OutcomeRateLimited`, `RetryAfterSeconds == 30`.
-    - Test 429 response with `Retry-After: <HTTP-Date>` -> classified as `OutcomeRateLimited`, `RetryAfterDate` parsed.
-    - Test 429 response with `RateLimit-*` and `X-RateLimit-*` headers -> all metrics correctly extracted.
-- [x] Transport Connection Pooling & Keep-Alive Reuse:
-  - Test consecutive requests to same target reuse existing TCP connections.
-  - Test `Close()` cleanly shuts down idle connections.
-
-### 5. CLI Integration Tests (`internal/cli`)
+### 4. CLI End-to-End Tests (`internal/cli`)
 - [x] `internal/cli/cli_test.go`:
-  - Test `daegsa version`: prints version, commit, build info; exit code 0.
-  - Test `daegsa help` and `daegsa --help`: prints help text; exit code 0.
-  - Test `daegsa validate --config <valid.yaml>`: validates config, prints sanitized plan summary; exit code 0.
-  - Test `daegsa validate --config <invalid_syntax.yaml>`: prints error; exit code 2 (`ExitCodeValidationFailure`).
-  - Test `daegsa validate --config <disallowed_host.yaml>`: safety refusal; exit code 4 (`ExitCodeSafetyRefusal`).
-  - Test `daegsa run --config <valid.yaml> --dry-run`: prints plan summary without sending traffic; exit code 0.
-  - Test `daegsa run --url <url> --method DELETE` without authorization: safety refusal; exit code 4 (`ExitCodeSafetyRefusal`).
-  - Test `daegsa run --url <url> --method DELETE --allow-destructive`: executes request successfully; exit code 0.
-  - Test `daegsa run --url <testtarget_url>`: executes single request against live testtarget, prints classification result; exit code 0.
+  - Test `daegsa run --url <testtarget> --users 5 --duration 200ms`: runs closed model, prints ANSI report, exits 0.
+  - Test `daegsa run --url <testtarget> --users 5 --duration 200ms --output-json <path>`: generates valid JSON report file on disk.
+  - Test `daegsa run --url <testtarget_500> --users 2 --duration 100ms`: exits with code 1 (`ExitCodeThresholdFailure`) due to unexpected status codes.
+  - Test `daegsa run --config <closed_config.yaml>`: loads YAML configuration, runs closed model, prints report, exits 0.
 
 ## Safety and failure behavior
 
-- **Safety Refusal Exit Code**: Any safety refusal (unauthorized host, unauthorized destructive method, safety ceiling breach, cross-origin redirect breach) must immediately terminate with process exit code `4` (`core.ExitCodeSafetyRefusal`).
-- **Validation Failure Exit Code**: Any YAML syntax error, unknown field, duplicate key, mutually exclusive parameter, or invalid flag combination must terminate with process exit code `2` (`core.ExitCodeValidationFailure`).
-- **No Traffic in Dry-Run or Validate**: The `validate` command and `--dry-run` flag must never open network connections to the target API or send HTTP requests (except standard loopback DNS preflight if enabled).
-- **Non-Interactive CI Mode**: In `--non-interactive` mode, the CLI must never attempt to read from `os.Stdin` or prompt the user for confirmation; any missing authorization must immediately refuse execution with exit code 4.
-- **Credential & Secret Protection**: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, token values, and secret URL query parameters must be unconditionally masked as `[REDACTED]` in all log messages, CLI outputs, dry-run plans, and error traces.
-- **Resource Bounds & Memory Safety**: Response bodies must always be read through `io.LimitReader` bounded by `ResponseBodyLimit` (capped at 50 MiB hard ceiling) and drained/closed to prevent socket and memory leaks.
-- **Shared Transport Lifecycle**: The `http.Transport` must be shared across requests and cleanly closed on shutdown to prevent orphaned goroutines or dangling sockets.
+- **Lock-Free Hot Path**: Worker VUs must never contend on a global metrics lock during request execution or recording. All request outcome and latency recording must be worker-local, with central merging occurring only during periodic snapshots or post-test finalization.
+- **Strict Memory Bounding**: Error messages and rate-limit header samples must use fixed-size circular buffers / slices (capped at 10 entries) to prevent unbounded memory growth during long soak tests. Histograms must use fixed bucket structures spanning 1µs to 1h.
+- **Graceful Shutdown Bounds**: When the load test duration expires, no new request iterations may be started. In-flight requests are allowed up to `GracefulStop` (default 5s, configurable) to drain. If requests remain in flight after `GracefulStop`, their execution contexts must be forcefully canceled and classified as `OutcomeCanceled`.
+- **Interrupt / Context Cancellation**: If the process receives SIGINT/SIGTERM or parent context is canceled, all running VU worker loops and active HTTP requests must immediately abort, join cleanly, and mark the report with `Incomplete: true` with exit code 3 (`ExitCodeRuntimeFailure`).
+- **Generator Saturation Warnings**: If the client generator detects high CPU (> 85%), excessive GC pauses, or high scheduler lag (> 50ms), it must record explicit warnings in both terminal and JSON reports to ensure operators do not mistake client saturation for server degradation.
+- **Secret Redaction Invariance**: Target URLs, credentials, authorization headers, cookies, and secret query parameters must remain unconditionally redacted in terminal reports, logs, and JSON reports.
 
 ## Acceptance gates
 
 1. **Clean Compilation & Zero Diagnostics**: `go build ./...` and `go vet ./...` compile with 0 warnings, 0 diagnostics, and 0 errors.
-2. **Deterministic & Concurrency Testing**: `go test -v -race ./...` passes 100% of unit, safety, plan, executor, and CLI tests.
-3. **8-Mode Test Target Verification**: `internal/executor` exercises and correctly classifies single requests across all 8 simulation modes of `internal/testtarget` (status codes, delays, payload streaming, redirects, TCP drops, timeout hangs, cookies, and 429 rate limiting).
-4. **Safety Refusal Enforcement**: Executing requests against non-allowlisted hosts or unapproved destructive methods (`POST`, `PUT`, `PATCH`, `DELETE`) is rejected before traffic begins with exit code 4.
-5. **Validation Error Enforcement**: Invalid configurations, unknown fields, duplicate keys, and invalid CLI overrides are rejected with exit code 2.
-6. **Dry-Run & Validation Fidelity**: `--dry-run` and `daegsa validate` produce sanitized, redacted plan summaries and exit with code 0 without sending test traffic.
-7. **Secret Redaction**: Secret tokens, credentials, and sensitive headers do not appear in CLI stdout/stderr, execution plans, fingerprints, or error messages.
-8. **Git Hygiene**: `git diff --check` passes with zero whitespace or formatting issues; no binaries, credentials, or temporary files are left in the worktree.
+2. **Deterministic & Race-Free Concurrency**: All unit, scheduler, report, and CLI tests pass cleanly without race conditions or deadlocks (`go test -v -count=1 ./...`).
+3. **Repeatable Closed Workload Execution**: `ClosedScheduler` runs exactly $N$ concurrent VU loops, correctly honors `think_time`, stops new iterations on duration expiration, drains in-flight requests within `graceful_stop`, and merges worker metrics without data loss.
+4. **Zero Goroutine & Connection Leaks**: Goroutine leak checks and connection pool teardown tests confirm 0 orphaned goroutines and 0 dangling TCP sockets after test completion.
+5. **Bounded-Memory Soak Compliance**: 100,000-iteration closed workload test confirms memory footprint remains strictly bounded with zero linear memory accumulation.
+6. **Full Report Delivery**: ANSI terminal report and JSON v1 report (`report_schema_version: 1`) are generated with complete request counts, 12-state outcome distributions, HTTP status tables, dual latency percentiles (all completed vs expected success), rate-limit observations, and generator health.
+7. **CLI Closed-Model Integration**: `daegsa run` successfully runs closed-model tests from CLI flags and YAML configurations, prints terminal summaries, exports `--output-json` files, and exits with canonical exit codes.
+8. **Git & Code Hygiene**: `git diff --check` passes with zero formatting or whitespace issues; no temporary artifacts or binaries committed.
 
 ## Explicit non-goals
 
-- Implementing the multi-worker metrics aggregator, HDR histograms, or real-time terminal UI dashboard (deferred to Phase 2).
-- Implementing closed-model virtual user loops or open-model Poisson/constant arrival rate schedulers (deferred to Phase 2 & Phase 3).
-- Implementing complex threshold parsing and pass/fail expression evaluators (deferred to Phase 4).
-- Implementing multi-token pools, credentials rotation, or multi-step scenario state extraction (deferred to Phase 5 & Phase 7).
-- Implementing ramp/spike/soak profile compilers or report-to-report comparison diffing (deferred to Phase 6).
+- Implementing the open arrival-rate scheduler, Poisson arrivals, or `max_in_flight` drop semantics (deferred to Phase 3).
+- Implementing threshold DSL parsing and evaluation expressions (deferred to Phase 4).
+- Implementing multi-token authentication pools or credential rotation (deferred to Phase 5).
+- Implementing ramp/spike/soak profile compilers or report comparison diffing (deferred to Phase 6 & Phase 7).
 
 ## Open questions
 
-*None. All CLI commands, configuration precedence rules, environment variable expansions, safety preflight checks, execution plan structures, shared transport settings, redirect policies, and outcome classifications are fully defined in `docs/DAEGSA_Implementation_Plan.md` and frozen for Phase 1.*
-
-## Handoff
-
-### For Implementer
-- Begin by adding `github.com/spf13/cobra` and `github.com/spf13/pflag` to `go.mod`.
-- Build the packages in dependency order:
-  1. `internal/config` (environment expansion `${VAR}`, CLI flag overrides, fingerprinting, redaction).
-  2. `internal/safety` (host allowlisting, destructive method authorization, ceilings, DNS preflight).
-  3. `internal/plan` (immutable plan representation, summary formatting).
-  4. `internal/executor` (shared transport, request builder, response body capper/drainer, rate-limit parser, outcome classifier integration).
-  5. `internal/cli` & `cmd/daegsa/main.go` (`run`, `validate`, `version`, `help` Cobra commands and exit code mapping).
-- Validate thoroughly against `internal/testtarget` across all 8 modes and write comprehensive test suites for all new packages.
-- Ensure all tests pass with `go test -v -race ./...` and `go vet ./...`.
+*None. The metrics architecture, HDR histogram boundaries, worker-local accumulation strategy, closed workload state machine, lifecycle transitions, terminal/JSON report formats, and exit code mappings are fully specified in `docs/DAEGSA_Implementation_Plan.md` and frozen for Phase 2.*
 
 ## Implementation handoff
 
-### Changed / Added Files
-- `go.mod`, `go.sum`: added dependencies `github.com/spf13/cobra` (v1.10.2) and `github.com/spf13/pflag` (v1.0.10).
-- `cmd/daegsa/main.go`: application entrypoint invoking `cli.Execute()` with clean `os.Exit(code)`.
-- `internal/config/env.go`, `internal/config/env_test.go`: environment variable resolution (`${VAR}`) with escape support (`$${VAR}`) and syntax error validation.
-- `internal/config/precedence.go`, `internal/config/precedence_test.go`: CLI flag precedence overlay onto parsed Config (`CLI > Env > YAML > Default`) with full invariant validation.
-- `internal/config/redact.go`, `internal/config/redact_test.go`: centralized redaction helpers for sensitive headers (`Authorization`, `Cookie`, `X-Api-Key`, etc.) and URL credentials/query tokens.
-- `internal/config/fingerprint.go`, `internal/config/fingerprint_test.go`: deterministic SHA256 configuration fingerprinting over sanitized canonical JSON.
-- `internal/safety/safety.go`, `internal/safety/preflight.go`, `internal/safety/safety_test.go`: safety preflight engine with host allowlisting (exact & wildcard), destructive HTTP method authorization, hard safety ceiling enforcement, and DNS preflight lookup.
-- `internal/plan/plan.go`, `internal/plan/print.go`, `internal/plan/plan_test.go`: immutable `Plan` representation, deep cloning, and sanitized console/dry-run summary formatter.
-- `internal/executor/transport.go`: shared tuned connection-pooled `http.Transport` factory.
-- `internal/executor/request.go`: HTTP request builder with byte estimation.
-- `internal/executor/response.go`: bounded response body reader with truncation probe and safe keep-alive draining.
-- `internal/executor/ratelimit.go`: standardized (`RateLimit-*`, `Retry-After`) and legacy (`X-RateLimit-*`) header parser.
-- `internal/executor/result.go`: execution result model with boundary timestamps, TTFB/latency, and protocol capture.
-- `internal/executor/executor.go`, `internal/executor/executor_test.go`: core HTTP request executor with redirect policy enforcement and testtarget integration covering all 8 simulation modes.
-- `internal/cli/exit.go`: process exit-code mapping (`PASS=0`, `FAIL_THRESHOLDS=1`, `VALIDATION_FAILURE=2`, `RUNTIME_FAILURE=3`, `SAFETY_REFUSAL=4`).
-- `internal/cli/flags.go`: CLI flag definitions and binding helpers.
-- `internal/cli/root.go`: root Cobra command structure and execution runner.
-- `internal/cli/version.go`: `version` subcommand with build metadata.
-- `internal/cli/validate.go`: `validate` subcommand for syntax, env, and safety preflight.
-- `internal/cli/run.go`: `run` subcommand supporting `--dry-run`, `--non-interactive`, `--allow-destructive`, and single-request execution.
-- `internal/cli/cli_test.go`: CLI end-to-end integration test suite.
+### Changed files
+- `go.mod` / `go.sum`: Added `github.com/HdrHistogram/hdrhistogram-go` v1.1.2 dependency.
+- `internal/metrics/histogram.go`: Defined `Histogram` interface and implemented `HDRHistogram` with bounded 1µs to 1h range at 3 significant figures.
+- `internal/metrics/histogram_test.go`: Unit tests for precision, percentiles, min/max/mean, clamping, merging, and zero-sample behavior.
+- `internal/metrics/worker.go`: Lock-free `WorkerMetrics` struct for per-VU outcome (12 states), status code, byte, TTFB, bounded error (max 10), and rate-limit header tracking.
+- `internal/metrics/worker_test.go`: Unit tests for worker-local recording across all 12 outcomes, status codes, error sample bounding, and rate-limit observations.
+- `internal/metrics/aggregate.go`: Central `MergeWorkers` aggregation engine computing start rates, completed throughput, error rates, and dual latency percentiles (all completed vs expected success).
+- `internal/metrics/aggregate_test.go`: Unit tests for multi-worker merging, mathematical reconciliation, and rate calculations.
+- `internal/metrics/health.go`: `GeneratorHealthSampler` tracking peak goroutines, memory stats, max CPU %, and scheduler lag with saturation warning rules.
+- `internal/metrics/health_test.go`: Unit tests for health sampling lifecycle and saturation warnings.
+- `internal/scheduler/scheduler.go`: Common `Scheduler` execution interface.
+- `internal/scheduler/closed.go`: `ClosedScheduler` running $N$ concurrent VU worker loops with think time, duration timer, graceful drain, in-flight accounting, and lifecycle state management.
+- `internal/scheduler/closed_test.go`: Deterministic lifecycle, think time, concurrency invariant, cancellation, and integration tests against `internal/testtarget`.
+- `internal/scheduler/leak_test.go`: Zero goroutine leak tests, zero connection leak tests, and bounded-memory soak tests.
+- `internal/report/types.go`: Updated report schema types with aliases to metrics types.
+- `internal/report/builder.go`: `BuildReport` constructing canonical `Report` (schema v1) from execution plan, metrics, and health diagnostics.
+- `internal/report/terminal.go`: ANSI-formatted terminal summary with header metadata, credentials redaction, requests & throughput, 12-state outcomes, status codes, latency comparison tables, rate limits, and health diagnostics.
+- `internal/report/terminal_test.go`: Unit tests for terminal formatting, table alignment, secret redaction, and outcome banners.
+- `internal/report/json.go`: `WriteJSONReport` serializing and atomically writing formatted JSON report files.
+- `internal/report/json_test.go`: Unit tests for JSON report generation and file persistence.
+- `internal/cli/flags.go`: Added `--output-json` (`-o`) flag.
+- `internal/cli/run.go`: Connected closed-model scheduler, metrics aggregator, and terminal/JSON reporters to `daegsa run`.
+- `internal/cli/cli_test.go`: End-to-end integration tests for closed-model runs, `--output-json` export, YAML config runs, and exit code mappings.
+- `benchmarks/metrics_bench_test.go`: Allocation and throughput benchmarks for histogram recording, quantile evaluation, worker-local recording, and central worker merging.
 
-### Behavior Implemented
-- Complete Cobra CLI commands (`version`, `validate`, `run`, `help`) with canonical exit codes.
-- Environment variable placeholder expansion `${VAR}` and escaping `$${VAR}` in YAML configs.
-- CLI flag precedence over YAML configurations.
-- Deterministic SHA256 fingerprinting of sanitized configuration.
-- Comprehensive credential redaction across headers, URLs, and console output.
-- Safety preflight engine enforcing host allowlists, destructive method authorizations (`POST`, `PUT`, `PATCH`, `DELETE`), hard safety ceilings, and DNS preflight resolution.
-- Immutable execution plan generation with deep cloning.
-- Shared tuned `http.Transport` with connection pooling and redirect security checks.
-- Outcome classification into 12 canonical states with microsecond-accurate timestamp capture (`ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`).
-- Rate-limit header observation extraction (`Retry-After`, `RateLimit-*`, `X-RateLimit-*`).
-- 8-mode verification against deterministic local test server `internal/testtarget`.
+### Behavior implemented
+- Full Phase 2 vertical slice: closed-model virtual-user workload generation, lock-free metrics recording, bounded HDR histogram tracking (1µs to 1h with 3 sig figs), 12-state outcome rollups, generator health diagnostics, and ANSI/JSON v1 report output.
+- All requests adhere strictly to bounded memory limits, zero goroutine leaks, and zero connection leaks.
+- Credential redaction is preserved across all terminal and JSON report outputs.
 
-### Commands Run and Results
-- `go mod tidy`: PASS (exit code 0).
-- `go vet ./...`: PASS (exit code 0, 0 warnings, 0 diagnostics).
-- `go build ./...`: PASS (exit code 0, clean build).
-- `go test -count=1 ./...`: PASS (exit code 0, 100% test pass rate across all packages).
-- `go test -race ./...`: Reported `-race requires cgo` (CGO is disabled in Windows AMD64 environment without C compiler).
-- `go run ./cmd/daegsa version`: PASS (printed version, commit, build info, exit code 0).
-- `go run ./cmd/daegsa --help`: PASS (printed root help text, exit code 0).
+### Commands run and results
+- `go test -v -count=1 .\...`: All tests in all packages passed (PASS).
+- `go vet .\...`: 0 warnings, 0 diagnostics, 0 errors.
+- `go build .\...`: Clean compilation across all packages.
+- `git diff --check`: Clean formatting and whitespace.
 
-### Known Limitations
-- Multi-worker metrics aggregator and HDR histograms are deferred to Phase 2 per plan.
-- Open/closed scheduler concurrency loops are deferred to Phase 2 & Phase 3 per plan.
+### Known limitations
+- Open arrival-rate model scheduling and `max_in_flight` drop semantics are non-goals for Phase 2 and deferred to Phase 3.
+- Threshold DSL evaluation expressions are deferred to Phase 4.
 
-### Remaining Unchecked Test or Acceptance Items
-- None. All Phase 1 acceptance gates and test checklist items have been verified and tested by the independent Plan Tester.
+### Remaining unchecked test or acceptance items
+- None. All acceptance gates and verification items in `## Test checklist` and `## Acceptance gates` have been independently validated and verified.

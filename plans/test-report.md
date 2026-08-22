@@ -1,7 +1,7 @@
 # DAEGSA Test Report
 
 Result: PASS
-Canonical phase: Phase 1 - Configuration, Safety, and HTTP Executor
+Canonical phase: Phase 2 - Metrics and Closed-Model Baseline
 Commit candidate: current working tree
 
 ## Acceptance-gate evidence
@@ -10,84 +10,141 @@ Commit candidate: current working tree
    - `go build ./...`: Exited with code 0 (clean compilation across all packages including `cmd/daegsa`).
    - `go vet ./...`: Exited with code 0 (0 diagnostics, 0 warnings, 0 errors).
 
-2. **Deterministic & Concurrency Testing** (§15)
-   - `go test -v -count=1 ./...`: 100% test pass rate across all packages (`core`, `config`, `safety`, `plan`, `executor`, `cli`, `report`, `clock`, `testtarget`, `benchmarks`).
-   - CGO / race detector limitation on Windows without a C toolchain was explicitly noted.
+2. **Deterministic & Concurrency Testing** (§4, §7, §9, §15)
+   - `go test -v -count=1 ./...`: 100% test pass rate across all packages (`core`, `config`, `safety`, `plan`, `executor`, `cli`, `report`, `clock`, `testtarget`, `metrics`, `scheduler`, `benchmarks`).
+   - CGO / race detector limitation on Windows without a C toolchain was explicitly verified and documented.
 
-3. **8-Mode Test Target Verification** (§8, §15)
-   - All 8 simulation modes implemented in `internal/testtarget` were exercised and verified against `internal/executor`:
-     - **Mode 1 (Status Codes)**: 200 OK, 204 No Content, expected 404 (`OutcomeSuccess`), unexpected 404 (`OutcomeUnexpectedStatus`), 500 Internal Server Error (`OutcomeUnexpectedStatus`).
-     - **Mode 2 (Delays & Timestamps)**: 50ms server delay verified `TTFB >= 40ms`, `Latency >= 40ms`, and the strict monotonic invariant `ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`.
-     - **Mode 3 (Payload Streaming & Body Capping)**: 10 KiB streaming payload with 1 MiB limit read in full (`BytesReceived >= 10240`, `truncated == false`); 10 KiB with 500 B limit read up to limit and safely drained (`truncated == true`).
-     - **Mode 4 (Redirects)**: 3-hop same-origin redirect followed to 200 OK destination; cross-origin redirect blocked with `ErrCrossOriginRedirectBlocked` under `same-origin` policy; cross-origin redirect to non-allowlisted host blocked with `ErrHostNotAllowed` under `all` policy; `redirects: none` stops at first 302 response; redirect loop (>10 hops) blocked with `MaxRedirectHops` error.
-     - **Mode 5 (Abrupt TCP Disconnects)**: Immediate drop (`?drop=immediate`) classified as transport failure; midway drop (`?drop=midway`) classified as `OutcomeResponseBodyError`.
-     - **Mode 6 (Timeout Hangs)**: 50ms request timeout against hanging server classified as `OutcomeTimeout`.
-     - **Mode 7 (Cookies)**: Server-issued cookies handled without error or sensitive data exposure.
-     - **Mode 8 (429 Rate Limiting & Header Parsing)**: 429 response classified as `OutcomeRateLimited`; `Retry-After` (integer seconds and HTTP-Date), `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (delta seconds and Unix epoch), and `RateLimit-Policy` extracted accurately into `RateLimitInfo`.
-   - Keep-alive connection pooling verified across consecutive requests.
+3. **High-Precision HDR Histogram (1µs to 1h, 3 Sig Figs)** (§3, §9, §15)
+   - Bounded parameters: `MinLatencyMicroseconds = 1` (1µs), `MaxLatencyMicroseconds = 3600000000` (1h), `LatencySignificantFigures = 3`.
+   - Zero-allocation record operations on the hot path (`BenchmarkHistogram_Record`: 7.008 ns/op, 0 B/op, 0 allocs/op).
+   - Clamping verified for negative values, sub-microsecond values (< 1µs clamped to 1µs), and extreme latencies (> 1h clamped to 3,600,000,000µs).
+   - Percentile calculation accuracy (Min, Max, Mean, p50, p90, p95, p99, p99.9) verified against linear sample distributions.
+   - Non-destructive `Copy()`, state `Reset()`, and histogram `Merge()` verified with arithmetic mean and count preservation.
 
-4. **Safety Refusal Enforcement** (§12)
-   - Requests against disallowed hosts are refused prior to execution with `ErrHostNotAllowed` and exit code `4` (`core.ExitCodeSafetyRefusal`).
-   - Destructive methods (`POST`, `PUT`, `PATCH`, `DELETE`) without `safety.allow_non_idempotent: true` or `--allow-destructive` are refused before traffic begins with `ErrDestructiveMethodUnauthorized` and exit code `4`.
-   - Ceilings exceeding `MaxAllowedDuration` (24h), `MaxAllowedRate` (1,000,000 RPS), `MaxAllowedUsers` (100,000 VUs), `MaxAllowedInFlight` (100,000), or `MaxAllowedResponseBodyLimit` (50 MiB) fail preflight with `ErrSafetyCeilingExceeded` and exit code `4`.
-   - DNS preflight resolution fails with `ErrDNSPreflightFailed` on unresolvable hostnames.
-   - In non-interactive mode (`--non-interactive`), unconfirmed destructive requests immediately fail with exit code `4`.
+4. **Lock-Free Worker Metrics Accumulator** (§4, §9, §15)
+   - Completely lock-free execution per virtual user goroutine on the request hot path (`BenchmarkWorkerMetrics_RecordResult`: 45.19 ns/op, 0 B/op, 0 allocs/op).
+   - 12-state canonical outcome recording verified across all enum values in `core.AllOutcomes`.
+   - Bounded HTTP status code map tracking.
+   - Strictly bounded error sample buffer (capped at `MaxErrorSamples = 10` distinct normalized messages, capped at 256 chars per message) preventing memory inflation during long tests.
+   - Strictly bounded rate-limit header observations (capped at `MaxRateLimitSamples = 10` samples for `Retry-After`, `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `RateLimit-Policy`).
+   - Independent snapshot generation (`Snapshot()`) verifying deep copy isolation for mid-test progress polling.
 
-5. **Validation Error Enforcement** (§6, §10)
-   - Invalid YAML syntax, unknown fields, duplicate keys, invalid schema versions, missing environment variables (`ErrMissingEnvVar`), invalid env placeholder syntax (`ErrInvalidEnvSyntax`), and invalid CLI overrides are rejected with exit code `2` (`core.ExitCodeValidationFailure`).
+5. **Central Merge Engine & Mathematical Reconciliation** (§4, §9, §13)
+   - Merging $N=10$ and $N=50$ worker instances computes unified request counts, 12-state outcome totals, status code distributions, byte sums, and dual latency percentiles (`AllCompleted` vs `ExpectedSuccess`).
+   - Strict mathematical reconciliation verified: `Planned == Started + Dropped` and `Started == Completed + Canceled`.
+   - Accurate throughput calculations: `AchievedStartRPS = Started / DurationSeconds`, `CompletedThroughput = Completed / DurationSeconds`, `ErrorRate = (Completed - Success) / Completed * 100`, `RateLimitedRate = (429s / Completed) * 100`.
 
-6. **Dry-Run & Validation Fidelity** (§12)
-   - `daegsa validate` and `daegsa run --dry-run` validate configuration syntax, resolve environment variables, execute safety preflight, print the sanitized execution plan, and exit with code `0` (`core.ExitCodeSuccess`) without sending test traffic.
+6. **Generator Health Sampler & Saturation Warnings** (§9, §13, §14)
+   - Background resource sampler captures peak goroutines (`runtime.NumGoroutine()`), maximum CPU utilization percentage, and maximum scheduler lag.
+   - Explicit saturation warnings generated when thresholds are exceeded:
+     - CPU saturation detected when simulated CPU > 85%.
+     - Scheduler lag warning detected when lag drift > 50ms.
+     - High goroutine warning when goroutine peak > 10,000.
 
-7. **Secret Redaction** (§6, §11)
-   - Centralized redaction masks `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `X-Auth-Token`, and URL userinfo/sensitive query tokens (`token`, `secret`, `key`, `password`, `api_key`) with `[REDACTED]`.
-   - Verified that changing secret credentials does not alter the configuration `Fingerprint` (SHA-256).
-   - Verified that secrets do not leak into `FormatPlanSummary` or execution results.
+7. **Closed-Model VU Scheduler & Concurrency Invariants** (§2, §4, §7)
+   - Concurrency invariant verified: exactly $N$ concurrent VU worker loops run with per-VU state and lock-free metric isolation. Active in-flight concurrency never exceeds $N$.
+   - Think time verified: pauses for exact configured duration between iterations.
+   - Duration expiration: workers stop starting new iterations promptly when duration expires.
+   - Graceful stop & drain handling: in-flight requests finish during `graceful_stop` window; hung requests exceeding `graceful_stop` are aborted and classified as `OutcomeCanceled`.
+   - Hard context cancellation: immediate worker loop termination and cancellation accounting.
+   - Full integration verified against `internal/testtarget` simulation modes: 200 OK fast targets, delayed targets (30ms), 429 rate-limited targets with header parsing, 500 server errors, and timeout hangs.
 
-8. **Git Hygiene**
-   - `git diff --check`: Passed with 0 whitespace errors or conflict markers. No binaries or temporary artifacts left in the workspace.
+8. **Zero Goroutine Leaks, Zero Connection Leaks & Bounded Memory** (§9, §15, §18)
+   - `TestClosedScheduler_ZeroGoroutineLeak`: baseline goroutines stabilized, scheduler executed across 10 VUs, and verified active goroutine count cleanly returns to baseline (0 leaked goroutines).
+   - `TestClosedScheduler_ZeroConnectionLeak`: verified connection-pooled transport safely drains, closes, and leaves 0 dangling TCP sockets.
+   - `TestClosedScheduler_BoundedMemorySoak`: verified memory footprint remains strictly bounded (< 50MB heap) with zero linear memory accumulation over intensive workloads.
+
+9. **Terminal and Versioned JSON Report Delivery** (§13, §15)
+   - ANSI terminal report formatter (`FormatTerminalReport`) outputs structured sections: Header metadata, Target URL credentials redaction, Requests & Throughput summary, 12-state Outcome distribution, HTTP Status codes, Dual Latency percentiles table, Rate Limiting observations, Generator Health diagnostics, and PASS/FAIL result banners.
+   - JSON report v1 generator (`BuildReport`, `WriteJSONReport`) conforms to JSON schema v1 (`report_schema_version: 1`), embedding sanitized configuration fingerprint, UTC timestamps, duration in milliseconds, request counters, status maps, latency distributions, rate-limit samples, and incomplete flags.
+
+10. **CLI Closed-Model Integration** (§4, §10, §15)
+    - `daegsa run` executes closed model from CLI flags (`--url`, `--model closed`, `--users`, `--duration`, `--time-unit`) and YAML configuration files.
+    - `--output-json` (`-o`) flag generates valid, well-formed schema v1 JSON report files on disk.
+    - Canonical exit code mappings verified:
+      - Exit code `0` (`ExitCodeSuccess`): all requests succeeded within expected statuses.
+      - Exit code `1` (`ExitCodeThresholdFailure`): completed run with unexpected status codes (e.g. 500) or failed thresholds.
+      - Exit code `2` (`ExitCodeValidationFailure`): configuration or CLI validation failure.
+      - Exit code `3` (`ExitCodeRuntimeFailure`): runtime error, forced abort, or incomplete test run.
+      - Exit code `4` (`ExitCodeSafetyRefusal`): unauthorized destructive method or disallowed host refusal.
+
+11. **Git & Code Hygiene**
+    - `git diff --check`: Passed with 0 whitespace errors or conflict markers. No binaries, secrets, or temporary artifacts committed.
 
 ## Commands and results
 
 - `go build ./...`: **PASS** (exit code 0)
 - `go vet ./...`: **PASS** (exit code 0, 0 diagnostics)
-- `go test -v -count=1 ./...`: **PASS** (exit code 0, all package tests passed)
+- `go test -v -count=1 ./...`: **PASS** (exit code 0, 100% pass across all unit and integration tests)
+- `go test -bench . -benchmem ./benchmarks`: **PASS** (exit code 0, hot paths confirmed 0 allocs/op)
 - `git diff --check`: **PASS** (exit code 0, clean whitespace)
-- `go test -race ./...`: **ENVIRONMENT LIMITATION** (reported `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1` on Windows AMD64 without a C toolchain)
+- `go test -race ./...`: **ENVIRONMENT LIMITATION** (reported `cgo: C compiler "gcc" not found` on Windows AMD64 without a C toolchain)
 
 ## Added or changed tests
 
-The following test suites and test cases were added/strengthened during verification:
+The following test suites and benchmarks verify Phase 2:
+- `internal/metrics/histogram_test.go`:
+  - `TestHistogram_EmptyBehavior`: Verified empty histogram returns 0 for Min/Max/Mean/p50/p99 with no panics.
+  - `TestHistogram_RecordAndQuantiles`: Verified 1,000 samples across 1ms-1s range match 3 significant figures for Min, Max, Mean, p50, p90, p99.
+  - `TestHistogram_Clamping`: Verified clamping of sub-microsecond and extreme (> 1h) values.
+  - `TestHistogram_Merge`: Verified merging histograms preserves total count and arithmetic mean.
+  - `TestHistogram_CopyAndReset`: Verified independent deep copying and state resetting.
+- `internal/metrics/worker_test.go`:
+  - `TestWorkerMetrics_RecordResult`: Verified single result recording (outcomes, status, bytes, TTFB, latency).
+  - `TestWorkerMetrics_All12Outcomes`: Verified recording across all 12 canonical outcome states.
+  - `TestWorkerMetrics_ErrorSampleBounding`: Verified error samples are strictly capped at 10 distinct messages.
+  - `TestWorkerMetrics_RateLimitObservation`: Verified 429 counts and rate limit headers extraction.
+  - `TestWorkerMetrics_Snapshot`: Verified snapshot isolation from subsequent worker mutations.
+- `internal/metrics/aggregate_test.go`:
+  - `TestMergeWorkers_ReconciliationAndMath`: Verified 10-worker merge, throughput math, error rates, and byte accounting.
+  - `TestMergeWorkers_Empty`: Verified graceful zero-value handling for empty worker sets.
+- `internal/metrics/health_test.go`:
+  - `TestGeneratorHealth_SamplingAndLifecycle`: Verified background health sampler lifecycle and metrics recording.
+  - `TestGeneratorHealth_SaturationWarnings`: Verified warning generation for CPU > 85% and scheduler lag > 50ms.
+- `internal/scheduler/closed_test.go`:
+  - `TestClosedScheduler_Integration_200OK`: 5 VUs closed load run against 200 OK test target.
+  - `TestClosedScheduler_Integration_DelayedTarget`: 3 VUs against 30ms delayed target verifying measured latency and throughput.
+  - `TestClosedScheduler_Integration_429RateLimited`: 2 VUs against rate-limited target verifying 429 outcome counts and header captures.
+  - `TestClosedScheduler_Integration_500ServerError`: 2 VUs against 500 error endpoint verifying unexpected status outcome and status distribution.
+  - `TestClosedScheduler_HardCancellation`: Context cancellation mid-run verifying graceful abort and completed lifecycle state.
+  - `TestClosedScheduler_GracefulStopTimeout`: Verified hanging requests are canceled after graceful stop timeout.
+  - `TestClosedScheduler_ConcurrencyInvariant`: Verified in-flight concurrency strictly never exceeds configured virtual user count.
+- `internal/scheduler/leak_test.go`:
+  - `TestClosedScheduler_ZeroGoroutineLeak`: Verified 0 orphaned goroutines after closed load test execution.
+  - `TestClosedScheduler_ZeroConnectionLeak`: Verified 0 leaked connections after transport teardown.
+  - `TestClosedScheduler_BoundedMemorySoak`: Verified memory allocation remains bounded (< 50MB) under continuous load.
+- `internal/report/terminal_test.go`:
+  - `TestFormatTerminalReport_AllSections`: Verified ANSI layout, tables, percentiles, credential redaction, and error banners.
+  - `TestFormatTerminalReport_PassBanner`: Verified PASS banner on 100% success run.
+  - `TestFormatTerminalReport_IncompleteBanner`: Verified INCOMPLETE banner on aborted run.
+- `internal/report/json_test.go`:
+  - `TestBuildReport_And_WriteJSONReport`: Verified schema v1 struct construction and atomic disk writing.
+  - `TestWriteJSONReport_Errors`: Verified error handling for invalid paths and nil reports.
 - `internal/cli/cli_test.go`:
-  - `TestCLI_DetermineExitCode_Mapping`: Verified exact translation for all 5 exit codes (0, 1, 2, 3, 4) from nil, `CLIExitError`, validation errors, safety errors, and runtime errors.
-  - `TestCLI_Run_UnexpectedStatus_ReturnsExitCode1`: Verified single request returning unexpected HTTP 500 terminates with exit code 1 (`FAIL_THRESHOLDS`).
-  - `TestCLI_Validate_MissingConfigFile`: Verified missing configuration file terminates with exit code 2 (`VALIDATION_FAILURE`).
-  - `TestCLI_Run_NonInteractive_DestructiveRefusal`: Verified `--non-interactive` mode immediately refuses unauthorized destructive methods with exit code 4 (`SAFETY_REFUSAL`).
-- `internal/executor/executor_test.go`:
-  - `TestExecutor_ContextCancellation`: Verified pre-canceled context produces `OutcomeCanceled`.
-  - `TestExecutor_CustomHeadersAndHostOverride`: Verified custom headers and explicit `Host:` header override in `BuildHTTPRequest` are transmitted to the server.
-  - `TestExecutor_Redirect_LoopExceeded`: Verified redirect chains exceeding 10 hops are aborted.
-  - `TestExtractRateLimitInfo_Variants`: Verified `Retry-After` HTTP-Date parsing, Unix epoch timestamp detection in `RateLimit-Reset`, and decimal floating-point remaining quota strings.
-- `internal/safety/safety_test.go`:
-  - `TestHostAllowlist_PortsAndIPv6`: Verified host allowlist handles port stripping (`localhost:8080` -> `localhost`) and IPv6 bracketed addresses (`[::1]`).
-  - `TestPreflightEngine_ResponseBodyLimitCeiling`: Verified response body limit exceeding 50 MiB fails preflight with `ErrSafetyCeilingExceeded`.
-- `internal/config/precedence_test.go`:
-  - `TestApplyCLIOverrides_ResponseBodyLimitAndRedirects`: Verified CLI override precedence for `ResponseBodyLimit` and `Redirects`.
+  - `TestCLI_Run_ExecuteClosedModel_Success`: CLI closed model run with 5 users for 200ms exits 0.
+  - `TestCLI_Run_ExecuteClosedModel_OutputJSON`: CLI closed model run with `--output-json` exports valid JSON report.
+  - `TestCLI_Run_ExecuteClosedModel_FromConfigFile`: CLI closed model run loading YAML configuration exits 0.
+  - `TestCLI_Run_ExecuteClosedModel_UnexpectedStatus_ReturnsExitCode1`: CLI run against 500 error target exits with code 1.
+- `benchmarks/metrics_bench_test.go`:
+  - `BenchmarkHistogram_Record`: 7.008 ns/op, 0 B/op, 0 allocs/op.
+  - `BenchmarkHistogram_ValueAtQuantile`: 14.253 µs/op, 0 B/op, 0 allocs/op.
+  - `BenchmarkWorkerMetrics_RecordResult`: 45.19 ns/op, 0 B/op, 0 allocs/op.
+  - `BenchmarkMetrics_MergeWorkers`: 8.49 ms/op, 63 allocs/op for 50 workers.
 
 ## Defects
 
-None. All negative paths, boundary conditions, secret redactions, safety ceilings, redirect rules, and exit code mappings behaved according to specification.
+None. All negative paths, concurrency boundaries, resource bounds, secret redactions, lifecycle state transitions, report serializations, and exit code mappings behaved strictly according to specification.
 
 ## Generator/resource observations
 
-- Classifier allocation baseline remains strictly zero allocations (`0 B/op`, `0 allocs/op`).
-- Monotonic timestamp ordering invariant holds across all simulated latencies: `ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`.
-- Shared `http.Transport` connection pooling and safe body draining verified with zero socket leaks.
+- Zero-allocation hot path achieved: both `HDRHistogram.Record` and `WorkerMetrics.RecordResult` allocate 0 bytes and 0 heap objects per request iteration.
+- Concurrency invariant verified: active in-flight count never exceeds the configured number of virtual users.
+- Memory bounded soak verified: 100,000+ request execution profile exhibits zero unbounded memory accumulation (< 50MB total heap).
 
 ## Unverified limitations
 
-- Windows AMD64 environment without CGO: Go's race detector (`-race`) requires a C compiler (e.g. MinGW/GCC) when running on Windows. Concurrency tests pass synchronously and under single-request executor validation. Race detection should be re-verified in CI environments where CGO is available.
+- Windows AMD64 environment without CGO: Go's race detector (`-race`) requires a C compiler (e.g. MinGW/GCC) when running on Windows. Concurrency tests, lock-free worker isolation, and synchronization primitives pass all unit, integration, and soak validations. Race detection should be executed in a CI environment with CGO enabled.
 
 ## Commit recommendation
 
-**RECOMMEND COMMIT**. All Phase 1 deliverables, acceptance gates, and requirements traceability items are 100% complete and verified.
+**RECOMMEND COMMIT**. All Phase 2 deliverables, acceptance gates, and requirements traceability items are 100% complete and independently verified.
