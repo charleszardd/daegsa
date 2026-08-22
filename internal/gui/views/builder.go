@@ -69,6 +69,7 @@ func (v *BuilderView) initDefaults() {
 
 // Layout renders the builder view.
 func (v *BuilderView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions {
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
 	v.initDefaults()
 
 	// Handle button events
@@ -84,6 +85,8 @@ func (v *BuilderView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 	items := []layout.Widget{
 		// Header Action Bar
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{
 				Axis:      layout.Horizontal,
 				Alignment: layout.Middle,
@@ -126,6 +129,7 @@ func (v *BuilderView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 			if v.State.Builder.ValidationStatus == "" {
 				return layout.Dimensions{}
 			}
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 
 			badgeType := widgets.BadgeSuccess
 			if v.State.Builder.ValidationStatus != "PASS" {
@@ -152,6 +156,8 @@ func (v *BuilderView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		// Main Config Form & YAML Split
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				// Left Panel: Quick Form
 				layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
@@ -258,7 +264,7 @@ func (v *BuilderView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 											Left:   unit.Dp(8),
 											Right:  unit.Dp(8),
 										}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-											gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(260))
+											gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(280))
 											return ed.Layout(gtx)
 										})
 									}),

@@ -36,6 +36,8 @@ func NewCompareView(s *gui.State) *CompareView {
 
 // Layout renders the comparison view.
 func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions {
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 	if v.compareBtn.Clicked(gtx) {
 		v.State.Compare.BaselinePath = v.baselinePathEd.Text()
 		v.State.Compare.CandidatePath = v.candidatePathEd.Text()
@@ -45,8 +47,10 @@ func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 	res := v.State.Compare.Result
 
 	items := []layout.Widget{
-		// Header
+		// Header Action Bar
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{
 				Axis:      layout.Horizontal,
 				Alignment: layout.Middle,
@@ -73,10 +77,14 @@ func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		// Input File Selectors Card
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return widgets.Card{
 				Title:    "Report Files",
 				Subtitle: "Specify baseline and candidate JSON report paths",
 			}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 					layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
 						return v.renderPathInput(gtx, th, "Baseline Report Path", &v.baselinePathEd, "e.g. baseline.json")
@@ -96,6 +104,7 @@ func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 			if v.State.Compare.ErrorMessage == "" {
 				return layout.Dimensions{}
 			}
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return widgets.Card{
 				BorderColor: th.Danger,
 			}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
@@ -107,19 +116,39 @@ func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		layout.Spacer{Height: unit.Dp(16)}.Layout,
 
-		// Comparison Table Card
+		// Comparison Table Card (Fills lower canvas)
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			if res == nil {
-				return widgets.Card{}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Body2(th.Material, "Select report files above and click 'Compare Reports' to view regression analysis.")
-					lbl.Color = th.TextSecondary
-					return lbl.Layout(gtx)
+				return widgets.Card{
+					Title:    "Regression Analysis",
+					Subtitle: "Automated delta checks across throughput, latencies, and error rates",
+				}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
+					return layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(24)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body1(th.Material, "No comparison loaded yet.")
+								lbl.Color = th.TextSecondary
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body2(th.Material, "Enter JSON file paths in the inputs above (or generate them via 'daegsa run --output-json') and click 'Compare Reports'.")
+								lbl.Color = th.TextMuted
+								return lbl.Layout(gtx)
+							}),
+						)
+					})
 				})
 			}
 
 			return widgets.Card{
 				Title: "Metric Regression Analysis",
 			}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				var rows []layout.FlexChild
 
 				// Table Header
@@ -152,7 +181,7 @@ func (v *CompareView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 							deltaColor = th.DangerText
 						}
 
-						return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 								layout.Flexed(0.3, v.tableCell(th, deltaItem.Name, th.TextPrimary)),
 								layout.Flexed(0.2, v.tableCell(th, fmt.Sprintf("%.2f", deltaItem.Baseline), th.TextSecondary)),

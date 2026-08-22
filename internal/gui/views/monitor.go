@@ -34,6 +34,8 @@ func NewMonitorView(s *gui.State) *MonitorView {
 
 // Layout renders the live telemetry view.
 func (v *MonitorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions {
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 	if v.stopBtn.Clicked(gtx) {
 		v.State.StopGracefully()
 	}
@@ -49,6 +51,8 @@ func (v *MonitorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 	items := []layout.Widget{
 		// Top Control Bar
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{
 				Axis:      layout.Horizontal,
 				Alignment: layout.Middle,
@@ -113,6 +117,8 @@ func (v *MonitorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		// Top 4 Metrics Cards
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				// Card 1: Target / Achieved RPS
 				layout.Flexed(0.25, func(gtx layout.Context) layout.Dimensions {
@@ -156,7 +162,8 @@ func (v *MonitorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		// Dual Real-Time Charts
 		func(gtx layout.Context) layout.Dimensions {
-			// Extract time series
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			var targetRPSVals, completedRPSVals []float64
 			var p50Vals, p95Vals, p99Vals []float64
 
@@ -208,6 +215,8 @@ func (v *MonitorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimension
 
 		// Bottom Panels: Latency Summary & Threshold Assertions
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				// Latency breakdown card
 				layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
