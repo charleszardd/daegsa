@@ -190,3 +190,60 @@ func TestFormatTerminalReport_IncompleteBanner(t *testing.T) {
 		t.Errorf("expected INCOMPLETE banner, got output: %s", output)
 	}
 }
+
+func TestFormatTerminalReport_OpenModel(t *testing.T) {
+	p := &plan.Plan{
+		Name:        "open-model-test",
+		Model:       core.WorkloadModelOpen,
+		Rate:        100,
+		TimeUnit:    time.Second,
+		MaxInFlight: 50,
+		Duration:    10 * time.Second,
+	}
+
+	rep := &Report{
+		ReportSchemaVersion: 1,
+		DurationMS:          10000,
+		WorkloadModel:       core.WorkloadModelOpen,
+		RequestCounts: RequestCounts{
+			Planned:   1000,
+			Scheduled: 950,
+			Started:   950,
+			Completed: 940,
+			Canceled:  10,
+			Dropped:   50,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 940,
+			core.OutcomeDropped: 50,
+		},
+		GeneratorHealth: GeneratorHealth{
+			GoroutinesPeak:     40,
+			CPUMaxPercent:      55.0,
+			SchedulerLagMaxMS:  5.2,
+			SaturationWarnings: []string{"target degradation or low max_in_flight caused dropped requests"},
+		},
+		Incomplete: false,
+	}
+
+	output := FormatTerminalReport(rep, p)
+
+	if !strings.Contains(output, "Workload Model:    open (Target Rate: 100.00 req/s, Rate: 100.0/1s, Max In-Flight: 50)") {
+		t.Errorf("missing or malformed open workload model line in output: %s", output)
+	}
+	if !strings.Contains(output, "Planned:           1000") {
+		t.Errorf("missing planned count in output")
+	}
+	if !strings.Contains(output, "Dropped:           50") {
+		t.Errorf("missing dropped count in output")
+	}
+	if !strings.Contains(output, "Achieved Start:    95.00 req/s") {
+		t.Errorf("missing achieved start rate in output")
+	}
+	if !strings.Contains(output, "Completed Rate:    94.00 req/s") {
+		t.Errorf("missing completed rate in output")
+	}
+	if !strings.Contains(output, "target degradation or low max_in_flight caused dropped requests") {
+		t.Errorf("missing saturation warning in output")
+	}
+}

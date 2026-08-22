@@ -323,3 +323,118 @@ func TestCLI_Run_NonInteractive_DestructiveRefusal(t *testing.T) {
 		t.Errorf("expected exit code 4 (SAFETY_REFUSAL), got %d (%s)", code, code)
 	}
 }
+
+func TestCLI_Run_ExecuteOpenModel_Success(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	// Execute open model run with 100 req/s for 200ms
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL(),
+		"--model", "open",
+		"--rate", "100",
+		"--time-unit", "1s",
+		"--max-in-flight", "50",
+		"--duration", "200ms",
+	})
+	if code != core.ExitCodeSuccess {
+		t.Errorf("expected exit code 0 for open model load run, got %d", code)
+	}
+}
+
+func TestCLI_Run_ExecuteOpenModel_OutputJSON(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	outJSON := filepath.Join(tmpDir, "open_report.json")
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL(),
+		"--model", "open",
+		"--rate", "100",
+		"--max-in-flight", "50",
+		"--duration", "200ms",
+		"--output-json", outJSON,
+	})
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read exported JSON report: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse exported JSON report: %v", err)
+	}
+
+	if int(parsed["report_schema_version"].(float64)) != 1 {
+		t.Errorf("expected report_schema_version 1, got %v", parsed["report_schema_version"])
+	}
+	if parsed["workload_model"] != "open" {
+		t.Errorf("expected workload_model 'open', got %v", parsed["workload_model"])
+	}
+	reqCounts := parsed["request_counts"].(map[string]interface{})
+	if reqCounts["completed"].(float64) <= 0 {
+		t.Errorf("expected completed requests > 0, got %v", reqCounts["completed"])
+	}
+}
+
+func TestCLI_Run_ExecuteOpenModel_FromConfigFile(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "open_test.yaml")
+	yamlContent := `
+schema_version: 1
+name: cli-open-yaml-test
+request:
+  url: ` + server.URL() + `
+  method: GET
+load:
+  model: open
+  rate: 50
+  time_unit: 1s
+  max_in_flight: 20
+  duration: 200ms
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"run", "--config", configFile})
+	if code != core.ExitCodeSuccess {
+		t.Errorf("expected exit code 0 for open config execution, got %d", code)
+	}
+}
+
+func TestCLI_Run_ExecuteOpenModel_UnexpectedStatus_ReturnsExitCode1(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	// Target returns 500 -> ExitCodeThresholdFailure (1)
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL() + "/?status=500",
+		"--model", "open",
+		"--rate", "50",
+		"--duration", "100ms",
+		"--max-in-flight", "20",
+	})
+	if code != core.ExitCodeThresholdFailure {
+		t.Errorf("expected exit code 1 (FAIL_THRESHOLDS) for status 500 in open model, got %d (%s)", code, code)
+	}
+}

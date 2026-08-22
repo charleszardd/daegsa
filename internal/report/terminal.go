@@ -50,7 +50,11 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 	if p != nil && p.Model == core.WorkloadModelClosed {
 		sb.WriteString(fmt.Sprintf("  Workload Model:    closed (Users: %d, Think Time: %s)\n", p.Users, p.ThinkTime))
 	} else if p != nil && p.Model == core.WorkloadModelOpen {
-		sb.WriteString(fmt.Sprintf("  Workload Model:    open (Rate: %.1f/%s, Max In Flight: %d)\n", p.Rate, p.TimeUnit, p.MaxInFlight))
+		var targetRPS float64
+		if p.TimeUnit > 0 {
+			targetRPS = p.Rate / p.TimeUnit.Seconds()
+		}
+		sb.WriteString(fmt.Sprintf("  Workload Model:    open (Target Rate: %.2f req/s, Rate: %.1f/%s, Max In-Flight: %d)\n", targetRPS, p.Rate, p.TimeUnit, p.MaxInFlight))
 	} else if rep.WorkloadModel != "" {
 		sb.WriteString(fmt.Sprintf("  Workload Model:    %s\n", rep.WorkloadModel))
 	}
