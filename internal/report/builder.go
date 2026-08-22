@@ -24,12 +24,18 @@ func BuildReport(
 	startTime time.Time,
 	endTime time.Time,
 	incomplete bool,
+	thresholdResults []ThresholdResult,
 ) *Report {
 	startUTC := startTime.UTC()
 	endUTC := endTime.UTC()
 	durationMS := endUTC.Sub(startUTC).Milliseconds()
 	if durationMS < 0 {
 		durationMS = 0
+	}
+
+	thresholds := thresholdResults
+	if thresholds == nil {
+		thresholds = make([]ThresholdResult, 0)
 	}
 
 	rep := &Report{
@@ -42,7 +48,7 @@ func BuildReport(
 		StartTimeUTC:        startUTC,
 		EndTimeUTC:          endUTC,
 		DurationMS:          durationMS,
-		Thresholds:          make([]ThresholdResult, 0),
+		Thresholds:          thresholds,
 		Incomplete:          incomplete,
 	}
 

@@ -1,87 +1,92 @@
 # DAEGSA Test Report
-
 Result: PASS
-Canonical phase: Phase 3 - Open Arrival-Rate Engine
+Canonical phase: Phase 4 - Thresholds and CI Contract
 Commit candidate: current working tree
 
 ## Acceptance-gate evidence
 
-| Acceptance Gate | Status | Evidence / Verification Target |
-| :--- | :--- | :--- |
-| **1. Clean Compilation & Zero Diagnostics** | **PASS** | `go build ./...` and `go vet ./...` executed with exit code 0 and zero warnings, diagnostics, or errors. |
-| **2. Deterministic Virtual-Time Accuracy** | **PASS** | `internal/scheduler/open_test.go`: `TestOpenScheduler_ExactIntervalSpacing_ControllableClock`, `TestOpenScheduler_FractionalSpacing_ControllableClock`, `TestOpenScheduler_StrictMaxInFlightSaturationAndDrops`, `TestOpenScheduler_AntiCatchUpBurstProgression`, `TestOpenScheduler_GracefulDrain`, `TestOpenScheduler_GracefulStopTimeoutExpiration`, `TestOpenScheduler_HardCancellation` all verified exact timing, pacing, and invariant behaviors. |
-| **3. Real-Clock Target Integration** | **PASS** | `internal/scheduler/open_test.go`: `TestOpenScheduler_Integration_Fast200OK` (100 RPS), `TestOpenScheduler_Integration_HigherRateTarget` (500 RPS), `TestOpenScheduler_Integration_SlowTargetOverloadAndDroppedRequests`, `TestOpenScheduler_Integration_429RateLimitedTarget`, `TestOpenScheduler_Integration_ServerErrorAndDisconnect` verified real-clock rate adherence, latency histogram separation, and accurate outcome classification against `internal/testtarget`. |
-| **4. Zero Goroutine & Connection Leaks** | **PASS** | `internal/scheduler/leak_test.go`: `TestOpenScheduler_ZeroGoroutineLeak` and `TestOpenScheduler_ZeroConnectionLeak` confirmed baseline goroutine counts and clean socket release. |
-| **5. Bounded-Memory Soak Compliance** | **PASS** | `internal/scheduler/leak_test.go`: `TestOpenScheduler_BoundedMemorySoak` confirmed memory footprint remains strictly bounded (< 50MB heap allocation across full execution). |
-| **6. Mathematical Reconciliation Invariance** | **PASS** | Verified across all test suites that `Planned == Started + Dropped` and `Started == Completed + Canceled` hold unconditionally. Dropped requests are classified as `core.OutcomeDropped` without skewing latency histograms. |
-| **7. Full Terminal and JSON v1 Report Delivery** | **PASS** | `internal/report/terminal_test.go` and `internal/cli/cli_test.go`: verified open-model terminal report formatting (Target Rate, Achieved Start Rate, Completed Throughput, Max In-Flight, Dropped Requests, and Generator Health) and valid `report_schema_version: 1` JSON exports. |
-| **8. CLI Integration** | **PASS** | `internal/cli/cli_test.go`: `daegsa run` executed open-model workloads with `--rate`, `--time-unit`, `--max-in-flight`, `--output-json`, validating correct exit codes (0 for success, 1 for threshold/target failures, 4 for safety refusal). |
-| **9. Git & Code Hygiene** | **PASS** | `git diff --check` passed cleanly with 0 whitespace errors. |
+1. **`go build ./...` compiles with 0 errors and 0 warnings**:
+   - Built successfully (`cmd/daegsa`, all `internal/...` packages, and root module).
+2. **`go vet ./...` passes with 0 diagnostics**:
+   - Passed cleanly across all packages.
+3. **All unit, integration, and CLI tests pass: `go test -v -count=1 ./...`**:
+   - 100% of tests passed across all packages (`internal/threshold`, `internal/config`, `internal/plan`, `internal/report`, `internal/cli`, `internal/executor`, `internal/scheduler`, `internal/metrics`, `internal/safety`, `internal/testtarget`).
+4. **JSON report serialization strictly validates against `testdata/schemas/v1/report.schema.json`**:
+   - Validated across passing threshold runs, failing threshold runs, and incomplete runs in `internal/report/schema_test.go`.
+5. **Canonical exit codes (0, 1, 2, 3, 4) are deterministically verified in automated tests**:
+   - Verified in `internal/cli/cli_test.go` (`TestCLI_Run_PassingThresholds_ExitCode0`, `TestCLI_Run_FailingThresholds_ExitCode1`, `TestCLI_Run_ExecuteClosedModel_UnexpectedStatus_ReturnsExitCode1`, `TestCLI_Run_InvalidThresholdSyntax_ExitCode2`, `TestCLI_Validate_InvalidSyntax`, `TestCLI_Run_Cancellation_ExitCode3_Incomplete`, `TestCLI_Validate_SafetyRefusal`, `TestCLI_Run_DestructiveUnauthorized`, `TestCLI_DetermineExitCode_Mapping`).
+6. **Single-line CI failure summary on `stderr` is verified**:
+   - Formatted via `FormatSingleLineSummary` in `internal/cli/exit.go` and verified in `TestCLI_FormatSingleLineSummary`.
+7. **`git diff --check` reports 0 whitespace errors or formatting issues**:
+   - Verified cleanly with 0 whitespace issues.
+
+---
 
 ## Commands and results
 
-1. **Build Validation**:
-   - `go build ./...`
-   - Result: PASS (exit code 0, 0 compiler diagnostics)
-2. **Static Analysis & Linting**:
-   - `go vet ./...`
-   - Result: PASS (exit code 0, 0 linter diagnostics)
-3. **Full Test Suite Execution**:
-   - `go test -v -count=1 ./...`
-   - Result: PASS (exit code 0, all packages passed)
-4. **Benchmark Suite Execution**:
-   - `go test -bench . -benchmem github.com/charleszardd/daegsa/benchmarks`
-   - Result: PASS (exit code 0, high-throughput scheduling verified across 1k, 10k, and 50k RPS)
-5. **Git Hygiene Check**:
-   - `git diff --check`
-   - Result: PASS (exit code 0, 0 whitespace violations)
+- `go test -v -count=1 ./...`: **PASS** (all test packages passed with 0 failures).
+- `go vet ./...`: **PASS** (0 diagnostics).
+- `go build ./...`: **PASS** (0 build errors).
+- `git diff --check`: **PASS** (0 whitespace errors).
+- `go test -race ./...`: **BLOCKED / SKIPPED BY PLATFORM** (Requires CGO/C compiler on Windows).
+
+---
 
 ## Added or changed tests
 
-- `internal/scheduler/open_test.go`:
-  - `TestNewOpenScheduler_Validation`: Constructor argument validation, error cases (`ErrInvalidPlan`, `ErrInvalidExecutor`, `ErrIncompatibleModel`, `ErrInvalidRate`, `ErrInvalidTimeUnit`, `ErrInvalidMaxInFlight`, `ErrZeroDuration`), and initial state checks.
-  - `TestOpenScheduler_ExactIntervalSpacing_ControllableClock`: Deterministic virtual-time step validation of 10 requests at 100ms intervals.
-  - `TestOpenScheduler_FractionalSpacing_ControllableClock`: Verified fractional interval spacing (3 req/s = 333.333ms) without drift accumulation.
-  - `TestOpenScheduler_StrictMaxInFlightSaturationAndDrops`: Verified atomic `max_in_flight = 3` concurrency tracking; verified 7 arrivals dropped as `OutcomeDropped` without dispatching or buffering.
-  - `TestOpenScheduler_AntiCatchUpBurstProgression`: Verified scheduler lag measurement and baseline advancement when lag > interval (preventing historical catch-up stampedes).
-  - `TestOpenScheduler_GracefulDrain`: Verified clean drain within `GracefulStop` window.
-  - `TestOpenScheduler_GracefulStopTimeoutExpiration`: Verified context cancellation of hanging requests after graceful timeout.
-  - `TestOpenScheduler_HardCancellation`: Verified prompt cancellation when parent context is canceled.
-  - `TestOpenScheduler_Integration_Fast200OK`: Real-clock execution against test target at 100 RPS.
-  - `TestOpenScheduler_Integration_HigherRateTarget`: Real-clock execution against test target at 500 RPS.
-  - `TestOpenScheduler_Integration_SlowTargetOverloadAndDroppedRequests`: Real-clock target overload causing dropped requests, verifying start rate vs completed rate separation.
-  - `TestOpenScheduler_Integration_429RateLimitedTarget`: Verified rate-limit header capture and outcome classification.
-  - `TestOpenScheduler_Integration_ServerErrorAndDisconnect`: Verified 500 status code classification and `inFlightCount` zero-reset.
-- `internal/scheduler/leak_test.go`:
-  - `TestOpenScheduler_ZeroGoroutineLeak`: Verified runtime goroutine balance after run completion.
-  - `TestOpenScheduler_ZeroConnectionLeak`: Verified pooled transport connection closure.
-  - `TestOpenScheduler_BoundedMemorySoak`: Verified heap allocations remain bounded under high iterations.
+- `internal/threshold/parser_test.go`:
+  - `TestParseThreshold_ValidExpressions`: Tests canonical metric names (`http_error_rate`, `rate_limited_rate`, `dropped_rate`, `p50`, `p90`, `p95`, `p99`, `p99.9`, `min_latency`, `max_latency`, `mean_latency`, `completed_rps`, `started_rps`, `target_rps`, `dropped_requests`, `failed_requests`, `completed_requests`, `canceled_requests`, `max_in_flight`), operators (`<`, `<=`, `>`, `>=`, `==`, `!=`), and units (`%`, `ms`, `s`, `µs`, `us`, `req/s`, `rps`, non-negative integer counts).
+  - `TestParseThreshold_InvalidExpressions`: Tests missing operators, missing target values, unit mismatches, out-of-bounds rates, decimals on counts, and negative counts.
+  - `TestParseThresholds_DeterministicOrdering`: Verifies alphabetical key sorting for deterministic evaluation order.
+- `internal/threshold/evaluator_test.go`:
+  - `TestEvaluate_AllPassing`: Tests passing threshold evaluations against aggregated metrics snapshot.
+  - `TestEvaluate_Failures`: Tests failing threshold expressions and error reporting.
+  - `TestEvaluate_BoundaryAndFloatEpsilon`: Tests `1e-9` floating-point tolerance and exact boundary conditions.
+  - `TestEvaluate_ZeroCompletedAndNilSafety`: Tests division-by-zero protection when 0 requests completed.
+  - `TestToReportResults`: Tests conversion from `threshold.Result` to `report.ThresholdResult`.
 - `internal/report/terminal_test.go`:
-  - `TestFormatTerminalReport_OpenModel`: Verified ANSI terminal reporting of Target Rate, Max In-Flight, and Scheduler Lag.
+  - `TestFormatTerminalReport_ThresholdEvaluation`: Tests ANSI terminal table rendering for thresholds with `PASS`/`FAIL` markers and failure banner.
+  - `TestFormatTerminalReport_AllThresholdsPassBanner`: Tests `TEST RESULT: PASS` banner.
+  - `TestFormatTerminalReport_IncompleteBanner`: Tests `TEST RESULT: INCOMPLETE (run aborted or timed out)` banner.
+- `internal/report/schema_test.go`:
+  - `TestReport_Serialization_GoldenPassingThresholds`: Validates JSON report with populated passing threshold items against `testdata/schemas/v1/report.schema.json`.
+  - `TestReport_Serialization_GoldenFailingThresholds`: Validates JSON report with failing thresholds against schema.
+  - `TestReport_Serialization_IncompleteRun`: Validates JSON report with `incomplete: true` against schema.
+  - `TestReport_SchemaMatchesFileSchema`: Validates schema JSON parsing and version.
+- `internal/config/schema_test.go`:
+  - `TestParseAndValidateYAML_ExampleConfigs`: Validates that `examples/open-api-capacity.yaml` and `examples/closed-api-smoke.yaml` parse and validate with canonical thresholds.
+- `internal/plan/plan_test.go`:
+  - `TestBuildPlan_ThresholdsImmutability`: Verifies deep copy and immutability of `Plan.Thresholds` and `ToEvaluationContext()`.
 - `internal/cli/cli_test.go`:
-  - `TestCLI_Run_ExecuteOpenModel_Success`: End-to-end CLI execution with open model.
-  - `TestCLI_Run_ExecuteOpenModel_OutputJSON`: Schema v1 JSON export verification.
-  - `TestCLI_Run_ExecuteOpenModel_FromConfigFile`: YAML configuration manifest execution.
-  - `TestCLI_Run_ExecuteOpenModel_UnexpectedStatus_ReturnsExitCode1`: Canonical exit code 1 verification on target errors.
-- `benchmarks/scheduler_bench_test.go`:
-  - `BenchmarkOpenScheduler_Dispatch_1000RPS`, `BenchmarkOpenScheduler_Dispatch_10000RPS`, `BenchmarkOpenScheduler_Dispatch_50000RPS`: Open arrival pacing hot path benchmarks.
+  - `TestCLI_Run_PassingThresholds_ExitCode0`: E2E test verifying exit code 0.
+  - `TestCLI_Run_FailingThresholds_ExitCode1`: E2E test verifying exit code 1.
+  - `TestCLI_Run_InvalidThresholdSyntax_ExitCode2`: E2E test verifying exit code 2.
+  - `TestCLI_Run_Cancellation_ExitCode3_Incomplete`: E2E test verifying context cancellation produces exit code 3.
+  - `TestCLI_FormatSingleLineSummary`: Unit test for single-line CI summary formatting across exit codes.
+  - `TestCLI_Run_JSONExportWithThresholds`: E2E test exporting JSON report with populated thresholds.
+
+---
 
 ## Defects
 
-*None. No production defects or behavioral regressions identified.*
+- None detected.
+
+---
 
 ## Generator/resource observations
 
-- Pacing calculations using `time.Duration(float64(timeUnit) / rate)` maintain sub-millisecond precision with zero cumulative drift when anchored to `nextTargetTick`.
-- Anti-catch-up burst logic cleanly clamps scheduled ticks to `actualTime.Add(interval)` when generator lag exceeds the arrival interval, safeguarding target servers from sudden load bursts following GC or OS scheduling delays.
-- Worker pool goroutines cleanly synchronize via `sync.WaitGroup` and respond immediately to context cancellation during graceful stops.
-- Mathematical invariants `Planned == Started + Dropped` and `Started == Completed + Canceled` were verified across all virtual-time and real-clock tests.
+- Threshold evaluation is strictly memory-bounded ($O(T)$ where $T \le 20$), performing zero allocations in the evaluation hot loop.
+- Division-by-zero protection verified: zero completed/planned requests return `0.0%` rate without causing `NaN` or panic.
+
+---
 
 ## Unverified limitations
 
-- **CGO / Race Detector Limitation**: The Go race detector (`go test -race`) requires CGO and a host C compiler (e.g., GCC/Clang/MinGW), which is not installed in the Windows test environment (`gcc: command not found`). All concurrent scheduler logic was independently verified through deterministic virtual-time tests, synchronization checks, leak tests, and invariant assertions.
-- **Phase Non-Goals**: Threshold DSL evaluation expressions (Phase 4), authentication credential rotation (Phase 5), and multi-stage load profiles (Phase 6) were not in scope for Phase 3.
+- `go test -race`: Go's race detector on Windows requires `cgo` and a C compiler (e.g. GCC/MinGW), which is not installed in the local Windows environment (`go: -race requires cgo; enable cgo by setting CGO_ENABLED=1`).
+- Multi-step scenarios and dynamic auth token pools are intentionally deferred to Phases 5 & 7 per roadmap.
+
+---
 
 ## Commit recommendation
 
-**RECOMMEND COMMIT**. All acceptance gates, unit tests, integration tests, benchmark suites, static analysis, and code hygiene checks have passed completely. Phase 3 is fully verified and ready for committer agent handoff.
+- **Recommend Commit**: All Phase 4 requirements, threshold parser/evaluator rules, report tables, JSON schema golden tests, single-line CI summaries, example CI workflows, and canonical exit codes (0, 1, 2, 3, 4) are completely implemented, verified, and passing.

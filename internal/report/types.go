@@ -6,6 +6,7 @@ import (
 
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/metrics"
+	"github.com/charleszardd/daegsa/internal/threshold"
 )
 
 // ExpectedReportSchemaVersion is the canonical report schema version (§13).
@@ -43,12 +44,7 @@ type Report struct {
 }
 
 // ThresholdResult records the pass/fail evaluation of a single threshold expression (§10, §13).
-type ThresholdResult struct {
-	Expression string `json:"expression"`
-	Target     string `json:"target"`
-	Observed   string `json:"observed"`
-	Passed     bool   `json:"passed"`
-}
+type ThresholdResult = threshold.ReportResult
 
 // ToJSON marshals the report to formatted JSON bytes.
 func (r *Report) ToJSON() ([]byte, error) {

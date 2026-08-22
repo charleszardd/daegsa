@@ -54,7 +54,7 @@ func TestBuildReport_And_WriteJSONReport(t *testing.T) {
 	startTime := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	endTime := startTime.Add(5 * time.Second)
 
-	rep := BuildReport(p, agg, health, startTime, endTime, false)
+	rep := BuildReport(p, agg, health, startTime, endTime, false, nil)
 
 	if rep.ReportSchemaVersion != ExpectedReportSchemaVersion {
 		t.Errorf("expected schema version %d, got %d", ExpectedReportSchemaVersion, rep.ReportSchemaVersion)

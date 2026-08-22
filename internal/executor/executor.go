@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/charleszardd/daegsa/internal/clock"
-	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/plan"
 	"github.com/charleszardd/daegsa/internal/safety"
@@ -38,17 +38,17 @@ func NewHTTPExecutor(p *plan.Plan) (*HTTPExecutor, error) {
 			}
 
 			switch p.RedirectPolicy {
-			case config.RedirectPolicyNone:
+			case core.RedirectPolicyNone:
 				return http.ErrUseLastResponse
 
-			case config.RedirectPolicySameOrigin:
+			case core.RedirectPolicySameOrigin:
 				initial := via[0].URL
 				if req.URL.Scheme != initial.Scheme || req.URL.Host != initial.Host {
 					return fmt.Errorf("%w: blocked redirect from %s to %s",
 						safety.ErrCrossOriginRedirectBlocked, initial.Host, req.URL.Host)
 				}
 
-			case config.RedirectPolicyAll:
+			case core.RedirectPolicyAll:
 				targetHost := req.URL.Hostname()
 				if targetHost == "" {
 					targetHost = req.URL.Host
@@ -92,7 +92,7 @@ func (e *HTTPExecutor) ExecuteRequest(ctx context.Context) (*Result, error) {
 	// Apply per-request timeout
 	timeout := e.plan.RequestTimeout
 	if timeout <= 0 {
-		timeout = config.DefaultRequestTimeout
+		timeout = 10 * time.Second
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

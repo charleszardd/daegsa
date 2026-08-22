@@ -185,3 +185,41 @@ func TestParseByteSize(t *testing.T) {
 		})
 	}
 }
+
+func TestParseAndValidateYAML_ExampleConfigs(t *testing.T) {
+	exampleFiles := []string{
+		filepath.Join("..", "..", "examples", "open-api-capacity.yaml"),
+		filepath.Join("..", "..", "examples", "closed-api-smoke.yaml"),
+	}
+
+	for _, file := range exampleFiles {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			rawBytes, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", file, err)
+			}
+
+			expanded, err := config.ExpandEnv(rawBytes, func(k string) string {
+				if k == "TARGET_URL" {
+					return "http://127.0.0.1:8080"
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatalf("failed to expand env in %s: %v", file, err)
+			}
+
+			cfg, err := config.ParseAndValidateYAML(expanded)
+			if err != nil {
+				t.Fatalf("failed to parse and validate %s: %v", file, err)
+			}
+
+			if cfg.SchemaVersion != 1 {
+				t.Errorf("schema_version = %d, want 1", cfg.SchemaVersion)
+			}
+			if len(cfg.Thresholds) == 0 {
+				t.Errorf("expected thresholds in %s, got 0", file)
+			}
+		})
+	}
+}
