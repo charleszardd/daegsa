@@ -16,6 +16,30 @@ The name **DAEGSA** is derived from a blend of concepts representing traffic loa
 
 > **Core Concept**: *Measuring the performance cost of a large influx of API traffic.*
 
+## Installation
+
+### Via `go install`
+
+```bash
+go install github.com/charleszardd/daegsa/cmd/daegsa@latest
+```
+
+Ensure your Go bin directory (`$GOPATH/bin` or `~/go/bin`, or `%USERPROFILE%\go\bin` on Windows) is included in your system `PATH`.
+
+### Pre-Built Binaries
+
+Download pre-compiled release packages for Windows, Linux, and macOS from [GitHub Releases](https://github.com/charleszardd/daegsa/releases).
+
+### Build from Source
+
+```bash
+git clone https://github.com/charleszardd/daegsa.git
+cd daegsa
+make build
+# or directly with go:
+# go build -trimpath -o bin/daegsa ./cmd/daegsa
+```
+
 ## Quick Start
 
 ```bash

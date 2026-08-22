@@ -16,6 +16,14 @@
 
 ## 2. Installation and Standalone Execution
 
+### Via `go install`
+
+```bash
+go install github.com/charleszardd/daegsa/cmd/daegsa@latest
+```
+
+Ensure your Go binary directory (`$GOPATH/bin` or `~/go/bin`, or `%USERPROFILE%\go\bin` on Windows) is in your system `PATH`.
+
 ### Standalone Executable Download
 
 Download pre-compiled release packages from GitHub Releases or build locally from source:
@@ -67,6 +75,7 @@ daegsa run --config test-plan.yaml --output-json report.json
 ```
 
 **Key Flags:**
+
 - `--config, -c`: Path to YAML configuration file.
 - `--url, -u`: Target HTTP/HTTPS endpoint URL.
 - `--model, -m`: Workload model (`open` or `closed`).
@@ -109,6 +118,7 @@ daegsa doctor --json
 ```
 
 **Diagnostic Checks Performed:**
+
 1. **Clock & Monotonic Timer Precision:** Evaluates OS timer resolution and sleep deviation.
 2. **Loopback & Local DNS Resolution:** Tests localhost lookup latency and IPv4/IPv6 resolution.
 3. **TLS Handshake & Root CA Store:** Validates TLS 1.2/1.3 cipher suites and system certificates.
@@ -133,6 +143,7 @@ daegsa self-test --json
 ```
 
 **Self-Test Test Suite:**
+
 1. `Closed Workload Loop`: 5 VUs, think time pacing, latency quantile calculation.
 2. `Open Arrival-Rate Pacing`: 50 RPS arrival pacing, max-in-flight bounding, dropped tick tracking.
 3. `Multi-Step Scenario`: Login token extraction, header substitution, cookie jar persistence, logout.
@@ -168,13 +179,13 @@ daegsa version
 
 Selecting the appropriate workload model is critical for accurate capacity and rate-limit discovery.
 
-| Feature | Open Arrival-Rate (`open`) | Closed VU Loop (`closed`) |
-| :--- | :--- | :--- |
-| **Pacing Driver** | Target rate per second (RPS) | Fixed number of Virtual Users |
-| **System Interaction** | Requests dispatched regardless of server latency | Next request issued only after previous response finishes |
-| **Coordinated Omission** | **Immune** (accurately reveals latency degradation) | Susceptible (queue delays reduce overall throughput) |
-| **Max In-Flight Safety** | Enforced via `max_in_flight` ceiling | Bounded by user count |
-| **Ideal For** | Public APIs, microservices, webhook consumers, capacity knee-point discovery | User session simulation, logged-in workflows, concurrent customer journeys |
+| Feature                        | Open Arrival-Rate (`open`)                                                 | Closed VU Loop (`closed`)                                                |
+| :----------------------------- | :--------------------------------------------------------------------------- | :------------------------------------------------------------------------- |
+| **Pacing Driver**        | Target rate per second (RPS)                                                 | Fixed number of Virtual Users                                              |
+| **System Interaction**   | Requests dispatched regardless of server latency                             | Next request issued only after previous response finishes                  |
+| **Coordinated Omission** | **Immune** (accurately reveals latency degradation)                    | Susceptible (queue delays reduce overall throughput)                       |
+| **Max In-Flight Safety** | Enforced via`max_in_flight` ceiling                                        | Bounded by user count                                                      |
+| **Ideal For**            | Public APIs, microservices, webhook consumers, capacity knee-point discovery | User session simulation, logged-in workflows, concurrent customer journeys |
 
 ### Example: Open Capacity Test
 
@@ -272,6 +283,7 @@ safety:
 ## 6. Rate-Limit Discovery & Analysis
 
 When benchmarking rate-limited APIs, DAEGSA captures:
+
 - HTTP `429 Too Many Requests` status codes.
 - `Retry-After` headers (both integer seconds and HTTP dates).
 - Standard `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers.
@@ -295,13 +307,13 @@ thresholds:
 
 DAEGSA returns canonical exit codes designed for automated CI gate evaluation:
 
-| Code | Status | Meaning |
-| :---: | :--- | :--- |
-| **`0`** | `PASS` | Test completed successfully and all thresholds passed. |
-| **`1`** | `FAIL_THRESHOLDS` | Test ran, but one or more configured thresholds failed. |
-| **`2`** | `VALIDATION_FAILURE` | Configuration syntax, environment resolution, or schema error. |
-| **`3`** | `RUNTIME_FAILURE` | Internal failure, unrecoverable network crash, or diagnostic failure. |
-| **`4`** | `SAFETY_REFUSAL` | Safety policy violation (disallowed host, unauthorized destructive method). |
+|      Code      | Status                 | Meaning                                                                     |
+| :-------------: | :--------------------- | :-------------------------------------------------------------------------- |
+| **`0`** | `PASS`               | Test completed successfully and all thresholds passed.                      |
+| **`1`** | `FAIL_THRESHOLDS`    | Test ran, but one or more configured thresholds failed.                     |
+| **`2`** | `VALIDATION_FAILURE` | Configuration syntax, environment resolution, or schema error.              |
+| **`3`** | `RUNTIME_FAILURE`    | Internal failure, unrecoverable network crash, or diagnostic failure.       |
+| **`4`** | `SAFETY_REFUSAL`     | Safety policy violation (disallowed host, unauthorized destructive method). |
 
 ### GitHub Actions Workflow Example
 
