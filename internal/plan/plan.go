@@ -15,6 +15,54 @@ import (
 	"github.com/charleszardd/daegsa/internal/threshold"
 )
 
+// OnFailurePolicy represents how a step failure is handled (§6, §7).
+type OnFailurePolicy string
+
+const (
+	OnFailureStop     OnFailurePolicy = config.OnFailureStop
+	OnFailureAbortVU  OnFailurePolicy = config.OnFailureAbortVU
+	OnFailureContinue OnFailurePolicy = config.OnFailureContinue
+)
+
+// ExtractionSource defines where to extract dynamic variables from (§6, §11).
+type ExtractionSource string
+
+const (
+	ExtractSourceJSON     ExtractionSource = config.ExtractSourceJSON
+	ExtractSourceJSONPath ExtractionSource = config.ExtractSourceJSONPath
+	ExtractSourceHeader   ExtractionSource = config.ExtractSourceHeader
+	ExtractSourceCookie   ExtractionSource = config.ExtractSourceCookie
+	ExtractSourceRegex    ExtractionSource = config.ExtractSourceRegex
+)
+
+// ExtractionRule represents a compiled response extraction rule (§6, §11).
+type ExtractionRule struct {
+	From       ExtractionSource
+	Expression string
+}
+
+// CompiledStep is an immutable step definition compiled for execution (§6, §7).
+type CompiledStep struct {
+	Name              string
+	URL               string
+	Method            string
+	Headers           http.Header
+	Body              string
+	ExpectedStatuses  []int
+	Timeout           time.Duration
+	ResponseBodyLimit int64
+	RedirectPolicy    string
+	ThinkTime         time.Duration
+	ExtractRules      map[string]ExtractionRule
+	OnFailure         OnFailurePolicy
+}
+
+// CompiledScenario is an immutable multi-step scenario manifest (§6, §7).
+type CompiledScenario struct {
+	Name  string
+	Steps []*CompiledStep
+}
+
 // Plan represents an immutable, validated, fully resolved execution manifest (§4, §6, §7).
 type Plan struct {
 	Name               string
@@ -28,6 +76,7 @@ type Plan struct {
 	RequestTimeout     time.Duration
 	ResponseBodyLimit  int64
 	RedirectPolicy     string
+	Scenario           *CompiledScenario
 	Model              core.WorkloadModel
 	Rate               float64
 	TimeUnit           time.Duration
@@ -75,9 +124,13 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		return nil, fmt.Errorf("failed to compute configuration fingerprint: %w", err)
 	}
 
-	bodyLimitBytes, err := config.ParseByteSize(cfg.Request.ResponseBodyLimit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse response body limit: %w", err)
+	bodyLimitBytes := int64(config.DefaultResponseBodyLimit)
+	if cfg.Request.ResponseBodyLimit != "" {
+		var parseErr error
+		bodyLimitBytes, parseErr = config.ParseByteSize(cfg.Request.ResponseBodyLimit)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse response body limit: %w", parseErr)
+		}
 	}
 
 	// Deep clone TargetURL
@@ -85,7 +138,7 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 	if preflight.TargetURL != nil {
 		u := *preflight.TargetURL
 		targetURL = &u
-	} else {
+	} else if cfg.Request.URL != "" {
 		parsed, parseErr := url.Parse(cfg.Request.URL)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid target URL: %w", parseErr)
@@ -164,6 +217,60 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		}
 	}
 
+	var compiledScenario *CompiledScenario
+	if cfg.Scenario != nil {
+		compiledSteps := make([]*CompiledStep, len(cfg.Scenario.Steps))
+		for i, s := range cfg.Scenario.Steps {
+			stepHeaders := make(http.Header, len(s.Headers))
+			for k, v := range s.Headers {
+				stepHeaders.Set(k, v)
+				if config.IsSensitiveHeader(k) && v != "" {
+					knownSecrets = append(knownSecrets, v)
+				}
+			}
+
+			stepStatuses := make([]int, len(s.ExpectedStatuses))
+			copy(stepStatuses, s.ExpectedStatuses)
+
+			stepBodyLimit := int64(config.DefaultResponseBodyLimit)
+			if s.ResponseBodyLimit != "" {
+				var parseErr error
+				stepBodyLimit, parseErr = config.ParseByteSize(s.ResponseBodyLimit)
+				if parseErr != nil {
+					return nil, fmt.Errorf("failed to parse step %q response body limit: %w", s.Name, parseErr)
+				}
+			}
+
+			stepExtract := make(map[string]ExtractionRule, len(s.Extract))
+			for varName, rule := range s.Extract {
+				stepExtract[varName] = ExtractionRule{
+					From:       ExtractionSource(rule.From),
+					Expression: rule.Expression,
+				}
+			}
+
+			compiledSteps[i] = &CompiledStep{
+				Name:              s.Name,
+				URL:               s.URL,
+				Method:            s.Method,
+				Headers:           stepHeaders,
+				Body:              s.Body,
+				ExpectedStatuses:  stepStatuses,
+				Timeout:           s.Timeout.Duration(),
+				ResponseBodyLimit: stepBodyLimit,
+				RedirectPolicy:    s.Redirects,
+				ThinkTime:         s.ThinkTime.Duration(),
+				ExtractRules:      stepExtract,
+				OnFailure:         OnFailurePolicy(s.OnFailure),
+			}
+		}
+
+		compiledScenario = &CompiledScenario{
+			Name:  cfg.Scenario.Name,
+			Steps: compiledSteps,
+		}
+	}
+
 	var compiledSegments []profile.Segment
 	var peakTargetRPS float64
 	var planDuration = cfg.Load.Duration.Duration()
@@ -173,17 +280,23 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		planDuration = compiledProfile.TotalDuration
 	}
 
+	planMethod := cfg.Request.Method
+	if cfg.Scenario != nil {
+		planMethod = "SCENARIO"
+	}
+
 	p := &Plan{
 		Name:               cfg.Name,
 		SchemaVersion:      cfg.SchemaVersion,
 		Fingerprint:        fingerprint,
 		TargetURL:          targetURL,
-		Method:             cfg.Request.Method,
+		Method:             planMethod,
 		Headers:            headers,
 		ExpectedStatuses:   expectedStatuses,
 		RequestTimeout:     cfg.Request.Timeout.Duration(),
 		ResponseBodyLimit:  bodyLimitBytes,
 		RedirectPolicy:     cfg.Request.Redirects,
+		Scenario:           compiledScenario,
 		Model:              cfg.Load.Model,
 		Rate:               cfg.Load.Rate,
 		TimeUnit:           cfg.Load.TimeUnit.Duration(),
@@ -202,7 +315,7 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		TokenProvider:      tokenProvider,
 		Authenticator:      authenticator,
 		JarManager:         jarManager,
-		CookieJarEnabled:   cfg.Auth.CookieJar,
+		CookieJarEnabled:   cfg.Auth.CookieJar || cfg.Scenario != nil,
 		KnownSecrets:       knownSecrets,
 		CompiledSegments:   compiledSegments,
 		PeakTargetRPS:      peakTargetRPS,

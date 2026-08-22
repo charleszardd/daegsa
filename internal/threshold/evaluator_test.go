@@ -282,3 +282,66 @@ func TestToReportResults(t *testing.T) {
 		t.Errorf("Passed = %v, want false", reportResults[1].Passed)
 	}
 }
+
+func TestEvaluate_StepThresholds(t *testing.T) {
+	thresholdMap := map[string]string{
+		"p95":                        "<= 200ms", // root threshold
+		"step.login.p95":             "<= 50ms",  // passing step threshold
+		"step.items.p95":             "<= 30ms",  // failing step threshold (observed 80ms)
+		"step.items.http_error_rate": "<= 1%",    // passing step threshold
+	}
+
+	thresholds, err := threshold.ParseThresholds(thresholdMap)
+	if err != nil {
+		t.Fatalf("ParseThresholds error: %v", err)
+	}
+
+	rootSnap := threshold.MetricsSnapshot{
+		P95LatencyMS: 120.0, // <= 200ms (PASS)
+	}
+
+	stepSnaps := map[string]threshold.MetricsSnapshot{
+		"login": {
+			P95LatencyMS: 40.0, // <= 50ms (PASS)
+		},
+		"items": {
+			P95LatencyMS: 80.0, // <= 30ms (FAIL)
+			ErrorRate:    0.0,  // <= 1% (PASS)
+		},
+	}
+
+	evalCtx := threshold.EvaluationContext{
+		TargetRPS:   100.0,
+		MaxInFlight: 50,
+	}
+
+	results, allPassed, err := threshold.EvaluateWithSteps(thresholds, rootSnap, stepSnaps, evalCtx)
+	if err != nil {
+		t.Fatalf("EvaluateWithSteps error: %v", err)
+	}
+
+	if allPassed {
+		t.Errorf("expected allPassed=false due to step.items.p95 violation")
+	}
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(results))
+	}
+
+	passCount := 0
+	failCount := 0
+	for _, r := range results {
+		if r.Passed {
+			passCount++
+		} else {
+			failCount++
+			if r.MetricName != "step.items.p95" {
+				t.Errorf("unexpected failing metric: %q", r.MetricName)
+			}
+		}
+	}
+
+	if passCount != 3 || failCount != 1 {
+		t.Errorf("expected 3 pass and 1 fail, got pass=%d fail=%d", passCount, failCount)
+	}
+}

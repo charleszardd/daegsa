@@ -24,6 +24,27 @@ type RateLimitObservations = metrics.RateLimitObservations
 type RateLimitHeaderSample = metrics.RateLimitHeaderSample
 type GeneratorHealth = metrics.GeneratorHealth
 
+// StepReport records execution metrics for an individual scenario step (§6, §13).
+type StepReport struct {
+	Name                string                 `json:"name"`
+	URL                 string                 `json:"url"`
+	Method              string                 `json:"method"`
+	RequestCounts       RequestCounts          `json:"request_counts"`
+	Outcomes            map[core.Outcome]int64 `json:"outcomes"`
+	StatusCodes         map[string]int64       `json:"status_codes"`
+	Latency             LatencySummary         `json:"latency"`
+	AchievedStartRPS    float64                `json:"achieved_start_rate"`
+	CompletedThroughput float64                `json:"completed_throughput"`
+	ErrorRate           float64                `json:"error_rate"`
+}
+
+// ScenarioReport records multi-step scenario execution metrics (§6, §13).
+type ScenarioReport struct {
+	Name       string                          `json:"name"`
+	Iterations metrics.ScenarioIterationCounts `json:"iterations"`
+	Steps      []StepReport                    `json:"steps,omitempty"`
+}
+
 // Report represents the canonical root JSON report document (§13).
 type Report struct {
 	ReportSchemaVersion int                       `json:"report_schema_version"`
@@ -44,6 +65,7 @@ type Report struct {
 	RateLimits          RateLimitObservations     `json:"rate_limits"`
 	GeneratorHealth     GeneratorHealth           `json:"generator_health"`
 	Auth                *AuthReportSummary        `json:"auth,omitempty"`
+	Scenario            *ScenarioReport           `json:"scenario,omitempty"`
 	Thresholds          []ThresholdResult         `json:"thresholds"`
 	Incomplete          bool                      `json:"incomplete"`
 	CompiledSegments    []profile.Segment         `json:"compiled_segments,omitempty"`

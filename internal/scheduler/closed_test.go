@@ -510,3 +510,132 @@ func TestClosedScheduler_CookieJar_Isolation(t *testing.T) {
 		t.Fatalf("persisted session count = %d, want %d", len(persistedSessions), users)
 	}
 }
+
+func TestClosedScheduler_MultiStepScenario(t *testing.T) {
+	var loginHits, itemsHits int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/login":
+			atomic.AddInt64(&loginHits, 1)
+			http.SetCookie(w, &http.Cookie{Name: "session_id", Value: "sess_123", Path: "/"})
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"token":"tok_valid_999"}`))
+		case "/api/items":
+			authHdr := r.Header.Get("Authorization")
+			cookie, _ := r.Cookie("session_id")
+			if authHdr != "Bearer tok_valid_999" || cookie == nil || cookie.Value != "sess_123" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			atomic.AddInt64(&itemsHits, 1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"items":["apple","banana"]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	serverURL, _ := url.Parse(server.URL)
+	jarManager, err := auth.NewVUJarManager(true, 3)
+	if err != nil {
+		t.Fatalf("failed to create jar manager: %v", err)
+	}
+
+	sc := &plan.CompiledScenario{
+		Name: "auth_and_items",
+		Steps: []*plan.CompiledStep{
+			{
+				Name:             "login",
+				URL:              server.URL + "/auth/login",
+				Method:           "POST",
+				ExpectedStatuses: []int{200},
+				Timeout:          2 * time.Second,
+				ExtractRules: map[string]plan.ExtractionRule{
+					"token": {
+						From:       plan.ExtractSourceJSON,
+						Expression: "token",
+					},
+				},
+				OnFailure: plan.OnFailureStop,
+			},
+			{
+				Name:   "get_items",
+				URL:    server.URL + "/api/items",
+				Method: "GET",
+				Headers: http.Header{
+					"Authorization": {"Bearer ${token}"},
+				},
+				ExpectedStatuses: []int{200},
+				Timeout:          2 * time.Second,
+				OnFailure:        plan.OnFailureStop,
+			},
+		},
+	}
+
+	p := &plan.Plan{
+		Name:              "scenario-scheduler-test",
+		SchemaVersion:     1,
+		Fingerprint:       "fingerprint",
+		TargetURL:         serverURL,
+		Method:            "SCENARIO",
+		Headers:           make(http.Header),
+		ExpectedStatuses:  []int{200},
+		RequestTimeout:    2 * time.Second,
+		ResponseBodyLimit: 1024 * 1024,
+		RedirectPolicy:    "same-origin",
+		Scenario:          sc,
+		Model:             core.WorkloadModelClosed,
+		Duration:          200 * time.Millisecond,
+		GracefulStop:      1 * time.Second,
+		Users:             3,
+		ThinkTime:         10 * time.Millisecond,
+		AllowedHosts:      []string{serverURL.Hostname()},
+		JarManager:        jarManager,
+		CookieJarEnabled:  true,
+	}
+
+	exec, err := executor.NewHTTPExecutor(p)
+	if err != nil {
+		t.Fatalf("failed to create http executor: %v", err)
+	}
+	defer exec.Close()
+
+	scheduler, err := NewClosedScheduler(p, exec, clock.NewRealClock())
+	if err != nil {
+		t.Fatalf("failed to create closed scheduler: %v", err)
+	}
+
+	agg, _, err := scheduler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("scheduler run failed: %v", err)
+	}
+
+	if agg.ScenarioIterations.Completed == 0 {
+		t.Errorf("expected completed scenario iterations > 0, got %d", agg.ScenarioIterations.Completed)
+	}
+	if agg.ScenarioIterations.Failed != 0 {
+		t.Errorf("expected failed scenario iterations == 0, got %d", agg.ScenarioIterations.Failed)
+	}
+
+	if len(agg.Steps) != 2 {
+		t.Fatalf("expected 2 steps in aggregate, got %d", len(agg.Steps))
+	}
+
+	loginStep := agg.Steps["login"]
+	itemsStep := agg.Steps["get_items"]
+	if loginStep == nil || itemsStep == nil {
+		t.Fatalf("missing login or items step aggregate")
+	}
+
+	if loginStep.RequestCounts.Completed != itemsStep.RequestCounts.Completed {
+		t.Errorf("login completed (%d) != items completed (%d)", loginStep.RequestCounts.Completed, itemsStep.RequestCounts.Completed)
+	}
+
+	if agg.RequestCounts.Completed != loginStep.RequestCounts.Completed+itemsStep.RequestCounts.Completed {
+		t.Errorf("root completed (%d) != sum of steps (%d)",
+			agg.RequestCounts.Completed, loginStep.RequestCounts.Completed+itemsStep.RequestCounts.Completed)
+	}
+}

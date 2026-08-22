@@ -110,16 +110,60 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
 }
 
+// Scenario and extraction constants.
+const (
+	MaxScenarioSteps = 50
+
+	OnFailureStop     = "stop"
+	OnFailureAbortVU  = "abort_vu"
+	OnFailureContinue = "continue"
+
+	ExtractSourceJSON     = "json"
+	ExtractSourceJSONPath = "jsonpath"
+	ExtractSourceHeader   = "header"
+	ExtractSourceCookie   = "cookie"
+	ExtractSourceRegex    = "regex"
+)
+
 // Config represents the top-level v1 configuration document (§6).
 type Config struct {
 	SchemaVersion int               `yaml:"schema_version" json:"schema_version"`
 	Name          string            `yaml:"name" json:"name"`
-	Request       RequestConfig     `yaml:"request" json:"request"`
+	Request       RequestConfig     `yaml:"request,omitempty" json:"request,omitempty"`
+	Scenario      *ScenarioConfig   `yaml:"scenario,omitempty" json:"scenario,omitempty"`
 	Load          LoadConfig        `yaml:"load" json:"load"`
 	RateLimit     RateLimitConfig   `yaml:"rate_limit,omitempty" json:"rate_limit,omitempty"`
 	Auth          AuthConfig        `yaml:"auth,omitempty" json:"auth,omitempty"`
 	Thresholds    map[string]string `yaml:"thresholds,omitempty" json:"thresholds,omitempty"`
 	Safety        SafetyConfig      `yaml:"safety,omitempty" json:"safety,omitempty"`
+}
+
+// ScenarioConfig defines a multi-step workflow scenario (§2, §6, §11).
+type ScenarioConfig struct {
+	Name  string       `yaml:"name" json:"name"`
+	Steps []StepConfig `yaml:"steps" json:"steps"`
+}
+
+// ExtractRuleConfig defines a response extraction rule (§6, §11).
+type ExtractRuleConfig struct {
+	From       string `yaml:"from" json:"from"`
+	Expression string `yaml:"expression" json:"expression"`
+}
+
+// StepConfig defines an individual HTTP step within a multi-step scenario (§6).
+type StepConfig struct {
+	Name              string                       `yaml:"name" json:"name"`
+	URL               string                       `yaml:"url" json:"url"`
+	Method            string                       `yaml:"method" json:"method"`
+	Headers           map[string]string            `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body              string                       `yaml:"body,omitempty" json:"body,omitempty"`
+	ExpectedStatuses  []int                        `yaml:"expected_statuses,omitempty" json:"expected_statuses,omitempty"`
+	Timeout           Duration                     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	ResponseBodyLimit string                       `yaml:"response_body_limit,omitempty" json:"response_body_limit,omitempty"`
+	Redirects         string                       `yaml:"redirects,omitempty" json:"redirects,omitempty"`
+	ThinkTime         Duration                     `yaml:"think_time,omitempty" json:"think_time,omitempty"`
+	Extract           map[string]ExtractRuleConfig `yaml:"extract,omitempty" json:"extract,omitempty"`
+	OnFailure         string                       `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
 }
 
 // AuthConfig defines static authentication and credential configuration (§6, §11).
@@ -135,8 +179,8 @@ type AuthConfig struct {
 
 // RequestConfig defines HTTP target and execution options (§6).
 type RequestConfig struct {
-	URL               string            `yaml:"url" json:"url"`
-	Method            string            `yaml:"method" json:"method"`
+	URL               string            `yaml:"url,omitempty" json:"url,omitempty"`
+	Method            string            `yaml:"method,omitempty" json:"method,omitempty"`
 	Headers           map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	ExpectedStatuses  []int             `yaml:"expected_statuses,omitempty" json:"expected_statuses,omitempty"`
 	Timeout           Duration          `yaml:"timeout,omitempty" json:"timeout,omitempty"`

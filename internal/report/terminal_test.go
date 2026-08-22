@@ -9,6 +9,7 @@ import (
 	"github.com/charleszardd/daegsa/internal/auth"
 	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/plan"
 )
 
@@ -403,5 +404,81 @@ func TestFormatTerminalReport_AuthSummary(t *testing.T) {
 	// Assert auth banner line exists
 	if !strings.Contains(output, "Auth:              token_pool (3 token(s), cookie jar enabled)") {
 		t.Errorf("missing or incorrect Auth line in terminal report: %s", output)
+	}
+}
+
+func TestFormatTerminalReport_ScenarioSteps(t *testing.T) {
+	p := &plan.Plan{
+		Name:   "scenario-terminal-test",
+		Method: "SCENARIO",
+		Model:  core.WorkloadModelClosed,
+		Users:  5,
+	}
+
+	rep := &Report{
+		ReportSchemaVersion: 1,
+		DurationMS:          10000,
+		RequestCounts: RequestCounts{
+			Planned:   200,
+			Started:   200,
+			Completed: 200,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 200,
+		},
+		Scenario: &ScenarioReport{
+			Name: "order_workflow",
+			Iterations: metrics.ScenarioIterationCounts{
+				Planned:   100,
+				Started:   100,
+				Completed: 100,
+				Failed:    0,
+			},
+			Steps: []StepReport{
+				{
+					Name:   "login",
+					Method: "POST",
+					URL:    "https://api.example.com/login",
+					RequestCounts: RequestCounts{
+						Completed: 100,
+					},
+					Latency: LatencySummary{
+						AllCompleted: LatencyPercentiles{
+							P50MS: 15.0,
+							P95MS: 30.0,
+							P99MS: 45.0,
+						},
+					},
+					CompletedThroughput: 10.0,
+					ErrorRate:           0.0,
+				},
+				{
+					Name:   "create_order",
+					Method: "POST",
+					URL:    "https://api.example.com/order",
+					RequestCounts: RequestCounts{
+						Completed: 100,
+					},
+					Latency: LatencySummary{
+						AllCompleted: LatencyPercentiles{
+							P50MS: 40.0,
+							P95MS: 75.0,
+							P99MS: 90.0,
+						},
+					},
+					CompletedThroughput: 10.0,
+					ErrorRate:           0.0,
+				},
+			},
+		},
+	}
+
+	output := FormatTerminalReport(rep, p)
+
+	if !strings.Contains(output, "SCENARIO: order_workflow (Planned: 100, Completed: 100, Failed: 0)") {
+		t.Errorf("missing scenario header in terminal report: %s", output)
+	}
+	if !strings.Contains(output, "login") || !strings.Contains(output, "create_order") {
+		t.Errorf("missing scenario steps in terminal report: %s", output)
 	}
 }

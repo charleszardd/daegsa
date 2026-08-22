@@ -113,6 +113,7 @@ var (
 // Threshold represents a validated, parsed performance threshold (§6, §10).
 type Threshold struct {
 	MetricName    string         `json:"metric_name"`
+	StepName      string         `json:"step_name,omitempty"`
 	Category      MetricCategory `json:"category"`
 	Operator      string         `json:"operator"`
 	TargetRaw     string         `json:"target_raw"`

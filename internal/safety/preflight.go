@@ -50,27 +50,69 @@ func (e *PreflightEngine) Check(ctx context.Context, cfg *config.Config, flags S
 		return nil, fmt.Errorf("%w: config cannot be nil", ErrSafetyRefusal)
 	}
 
-	targetURL, err := url.Parse(cfg.Request.URL)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid target URL %q", ErrSafetyRefusal, config.RedactURL(cfg.Request.URL))
+	// 1. Collect target URLs, hosts, and methods to validate
+	type targetEndpoint struct {
+		targetURL *url.URL
+		host      string
+		method    string
+		bodyLimit string
+	}
+	var targets []targetEndpoint
+
+	if cfg.Scenario != nil {
+		for _, step := range cfg.Scenario.Steps {
+			parsedURL, err := url.Parse(step.URL)
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid step URL %q: %w", ErrSafetyRefusal, config.RedactURL(step.URL), err)
+			}
+			host := parsedURL.Hostname()
+			if host == "" {
+				host = parsedURL.Host
+			}
+			targets = append(targets, targetEndpoint{
+				targetURL: parsedURL,
+				host:      host,
+				method:    step.Method,
+				bodyLimit: step.ResponseBodyLimit,
+			})
+		}
+	} else {
+		targetURL, err := url.Parse(cfg.Request.URL)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid target URL %q", ErrSafetyRefusal, config.RedactURL(cfg.Request.URL))
+		}
+		host := targetURL.Hostname()
+		if host == "" {
+			host = targetURL.Host
+		}
+		targets = append(targets, targetEndpoint{
+			targetURL: targetURL,
+			host:      host,
+			method:    cfg.Request.Method,
+			bodyLimit: cfg.Request.ResponseBodyLimit,
+		})
 	}
 
-	host := targetURL.Hostname()
-	if host == "" {
-		host = targetURL.Host
-	}
+	// 2. Validate Host Allowlist & Destructive Methods for each target
+	for _, tgt := range targets {
+		if tgt.host != "" && !IsHostAllowed(tgt.host, cfg.Safety.AllowedHosts) {
+			return nil, fmt.Errorf("%w: %w: target host %q is not in allowed_hosts %v",
+				ErrSafetyRefusal, ErrHostNotAllowed, tgt.host, cfg.Safety.AllowedHosts)
+		}
 
-	// 1. Host Allowlist Check
-	if !IsHostAllowed(host, cfg.Safety.AllowedHosts) {
-		return nil, fmt.Errorf("%w: %w: target host %q is not in allowed_hosts %v",
-			ErrSafetyRefusal, ErrHostNotAllowed, host, cfg.Safety.AllowedHosts)
-	}
+		if IsDestructiveMethod(tgt.method) {
+			if !cfg.Safety.AllowNonIdempotent && !flags.AllowDestructive {
+				return nil, fmt.Errorf("%w: %w: HTTP method %s requires explicit authorization (safety.allow_non_idempotent: true or --allow-destructive)",
+					ErrSafetyRefusal, ErrDestructiveMethodUnauthorized, tgt.method)
+			}
+		}
 
-	// 2. Destructive HTTP Method Check
-	if IsDestructiveMethod(cfg.Request.Method) {
-		if !cfg.Safety.AllowNonIdempotent && !flags.AllowDestructive {
-			return nil, fmt.Errorf("%w: %w: HTTP method %s requires explicit authorization (safety.allow_non_idempotent: true or --allow-destructive)",
-				ErrSafetyRefusal, ErrDestructiveMethodUnauthorized, cfg.Request.Method)
+		if tgt.bodyLimit != "" {
+			limitBytes, err := config.ParseByteSize(tgt.bodyLimit)
+			if err == nil && limitBytes > MaxAllowedResponseBodyLimit {
+				return nil, fmt.Errorf("%w: %w: response_body_limit %d exceeds hard ceiling %d",
+					ErrSafetyRefusal, ErrSafetyCeilingExceeded, limitBytes, MaxAllowedResponseBodyLimit)
+			}
 		}
 	}
 
@@ -104,41 +146,48 @@ func (e *PreflightEngine) Check(ctx context.Context, cfg *config.Config, flags S
 		return nil, fmt.Errorf("%w: %w: max_in_flight %d exceeds hard ceiling %d",
 			ErrSafetyRefusal, ErrSafetyCeilingExceeded, cfg.Load.MaxInFlight, MaxAllowedInFlight)
 	}
-	if cfg.Request.ResponseBodyLimit != "" {
-		limitBytes, err := config.ParseByteSize(cfg.Request.ResponseBodyLimit)
-		if err == nil && limitBytes > MaxAllowedResponseBodyLimit {
-			return nil, fmt.Errorf("%w: %w: response_body_limit %d exceeds hard ceiling %d",
-				ErrSafetyRefusal, ErrSafetyCeilingExceeded, limitBytes, MaxAllowedResponseBodyLimit)
+
+	// 4. DNS Preflight Resolution on all unique hosts
+	uniqueHosts := make(map[string]struct{})
+	for _, tgt := range targets {
+		if tgt.host != "" {
+			uniqueHosts[tgt.host] = struct{}{}
 		}
 	}
 
-	// 4. DNS Preflight Resolution
 	var resolvedIPs []net.IP
-	if ip := net.ParseIP(host); ip != nil {
-		resolvedIPs = []net.IP{ip}
-	} else if !flags.SkipDNSPreflight {
-		resolver := e.resolver
-		if resolver == nil {
-			resolver = net.DefaultResolver
+	for host := range uniqueHosts {
+		if ip := net.ParseIP(host); ip != nil {
+			resolvedIPs = append(resolvedIPs, ip)
+		} else if !flags.SkipDNSPreflight {
+			resolver := e.resolver
+			if resolver == nil {
+				resolver = net.DefaultResolver
+			}
+			ipAddrs, err := resolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w: DNS preflight lookup failed for host %q: %w",
+					ErrSafetyRefusal, ErrDNSPreflightFailed, host, err)
+			}
+			if len(ipAddrs) == 0 {
+				return nil, fmt.Errorf("%w: %w: no IP addresses resolved for host %q",
+					ErrSafetyRefusal, ErrDNSPreflightFailed, host)
+			}
+			for _, addr := range ipAddrs {
+				resolvedIPs = append(resolvedIPs, addr.IP)
+			}
 		}
-		ipAddrs, err := resolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w: DNS preflight lookup failed for host %q: %w",
-				ErrSafetyRefusal, ErrDNSPreflightFailed, host, err)
-		}
-		if len(ipAddrs) == 0 {
-			return nil, fmt.Errorf("%w: %w: no IP addresses resolved for host %q",
-				ErrSafetyRefusal, ErrDNSPreflightFailed, host)
-		}
-		resolvedIPs = make([]net.IP, len(ipAddrs))
-		for i, addr := range ipAddrs {
-			resolvedIPs[i] = addr.IP
-		}
+	}
+
+	primaryTargetURL := targets[0].targetURL
+	primaryMethod := targets[0].method
+	if cfg.Scenario != nil {
+		primaryMethod = "SCENARIO"
 	}
 
 	return &PreflightResult{
-		TargetURL:   targetURL,
-		Method:      cfg.Request.Method,
+		TargetURL:   primaryTargetURL,
+		Method:      primaryMethod,
 		ResolvedIPs: resolvedIPs,
 		Authorized:  true,
 	}, nil

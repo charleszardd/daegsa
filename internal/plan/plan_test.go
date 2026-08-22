@@ -253,3 +253,79 @@ func TestBuildPlan_AuthIntegration(t *testing.T) {
 		t.Errorf("missing Cookie Jar Isolation in summary: %s", summary)
 	}
 }
+
+func TestBuildPlan_ScenarioSupport(t *testing.T) {
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Name:          "scenario-plan-test",
+		Scenario: &config.ScenarioConfig{
+			Name: "auth_and_query",
+			Steps: []config.StepConfig{
+				{
+					Name:   "login",
+					URL:    "https://api.example.com/login",
+					Method: "POST",
+					Body:   `{"user":"test"}`,
+					Headers: map[string]string{
+						"Authorization": "Bearer secret_step_tok",
+					},
+					Extract: map[string]config.ExtractRuleConfig{
+						"token": {
+							From:       "json",
+							Expression: "token",
+						},
+					},
+					OnFailure: "stop",
+				},
+				{
+					Name:      "get_items",
+					URL:       "https://api.example.com/items",
+					Method:    "GET",
+					ThinkTime: config.Duration(50 * time.Millisecond),
+					OnFailure: "continue",
+				},
+			},
+		},
+		Load: config.LoadConfig{
+			Model:    core.WorkloadModelClosed,
+			Users:    5,
+			Duration: config.Duration(10 * time.Second),
+		},
+		Safety: config.SafetyConfig{
+			AllowedHosts:       []string{"api.example.com"},
+			AllowNonIdempotent: true,
+		},
+	}
+
+	targetURL, _ := url.Parse("https://api.example.com/login")
+	preflight := &safety.PreflightResult{
+		TargetURL:   targetURL,
+		Method:      "SCENARIO",
+		ResolvedIPs: []net.IP{net.ParseIP("127.0.0.1")},
+		Authorized:  true,
+	}
+
+	p, err := BuildPlan(cfg, preflight)
+	if err != nil {
+		t.Fatalf("BuildPlan failed: %v", err)
+	}
+
+	if p.Scenario == nil {
+		t.Fatalf("expected compiled Scenario in Plan, got nil")
+	}
+	if p.Scenario.Name != "auth_and_query" {
+		t.Errorf("expected scenario name 'auth_and_query', got %q", p.Scenario.Name)
+	}
+	if len(p.Scenario.Steps) != 2 {
+		t.Fatalf("expected 2 compiled steps, got %d", len(p.Scenario.Steps))
+	}
+	if p.Scenario.Steps[0].Name != "login" || p.Scenario.Steps[0].Method != "POST" {
+		t.Errorf("step 0 mismatch: %v", p.Scenario.Steps[0])
+	}
+	if p.Scenario.Steps[1].Name != "get_items" || p.Scenario.Steps[1].ThinkTime != 50*time.Millisecond {
+		t.Errorf("step 1 mismatch: %v", p.Scenario.Steps[1])
+	}
+	if !p.CookieJarEnabled {
+		t.Errorf("expected CookieJarEnabled true for scenarios")
+	}
+}

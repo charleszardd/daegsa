@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/charleszardd/daegsa/internal/core"
@@ -74,9 +75,30 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("%w: name cannot be empty", ErrConfigValidation)
 	}
 
-	// 3. Request validation & normalization
-	if err := validateRequestConfig(&cfg.Request); err != nil {
-		return err
+	// 3. Target validation (mutual exclusivity: either request or scenario)
+	hasRequest := strings.TrimSpace(cfg.Request.URL) != ""
+	hasScenario := cfg.Scenario != nil
+
+	if hasRequest && hasScenario {
+		return fmt.Errorf("%w: cannot specify both request and scenario", ErrConfigValidation)
+	}
+	if !hasRequest && !hasScenario {
+		return fmt.Errorf("%w: must specify either request or scenario", ErrConfigValidation)
+	}
+
+	if hasRequest {
+		if err := validateRequestConfig(&cfg.Request); err != nil {
+			return err
+		}
+	}
+
+	if hasScenario {
+		if err := validateScenarioConfig(cfg.Scenario); err != nil {
+			return err
+		}
+		if cfg.Load.Model != core.WorkloadModelClosed {
+			return fmt.Errorf("%w: scenarios require load.model: closed", ErrConfigValidation)
+		}
 	}
 
 	// 4. Load validation & normalization
@@ -380,6 +402,142 @@ func checkDuplicateKeys(node *yaml.Node) error {
 		for _, item := range node.Content {
 			if err := checkDuplicateKeys(item); err != nil {
 				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateScenarioConfig(scenario *ScenarioConfig) error {
+	if scenario == nil {
+		return fmt.Errorf("%w: scenario cannot be nil", ErrConfigValidation)
+	}
+	if strings.TrimSpace(scenario.Name) == "" {
+		return fmt.Errorf("%w: scenario.name cannot be empty", ErrConfigValidation)
+	}
+	if len(scenario.Steps) == 0 {
+		return fmt.Errorf("%w: scenario must define at least one step", ErrConfigValidation)
+	}
+	if len(scenario.Steps) > MaxScenarioSteps {
+		return fmt.Errorf("%w: scenario cannot exceed %d steps, got %d", ErrConfigValidation, MaxScenarioSteps, len(scenario.Steps))
+	}
+
+	seenNames := make(map[string]struct{}, len(scenario.Steps))
+	for i := range scenario.Steps {
+		step := &scenario.Steps[i]
+		stepName := strings.TrimSpace(step.Name)
+		if stepName == "" {
+			return fmt.Errorf("%w: scenario.steps[%d].name cannot be empty", ErrConfigValidation, i)
+		}
+		if _, exists := seenNames[stepName]; exists {
+			return fmt.Errorf("%w: duplicate step name %q in scenario", ErrConfigValidation, stepName)
+		}
+		seenNames[stepName] = struct{}{}
+		step.Name = stepName
+
+		if err := validateStepConfig(step); err != nil {
+			return fmt.Errorf("step %q: %w", stepName, err)
+		}
+	}
+	return nil
+}
+
+func validateStepConfig(step *StepConfig) error {
+	trimmedURL := strings.TrimSpace(step.URL)
+	if trimmedURL == "" {
+		return fmt.Errorf("%w: step url cannot be empty", ErrConfigValidation)
+	}
+	if !strings.HasPrefix(trimmedURL, "http://") && !strings.HasPrefix(trimmedURL, "https://") {
+		return fmt.Errorf("%w: step url must be a valid absolute http/https URL, got %q", ErrConfigValidation, RedactURL(step.URL))
+	}
+
+	method := strings.ToUpper(strings.TrimSpace(step.Method))
+	if method == "" {
+		method = "GET"
+	}
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		step.Method = method
+	default:
+		return fmt.Errorf("%w: unsupported step method %q", ErrConfigValidation, step.Method)
+	}
+
+	if step.Timeout.Duration() < 0 {
+		return fmt.Errorf("%w: step timeout cannot be negative", ErrConfigValidation)
+	}
+	if step.Timeout.Duration() == 0 {
+		step.Timeout = Duration(DefaultRequestTimeout)
+	}
+
+	if len(step.ExpectedStatuses) == 0 {
+		step.ExpectedStatuses = []int{200}
+	} else {
+		for _, s := range step.ExpectedStatuses {
+			if s < 100 || s > 599 {
+				return fmt.Errorf("%w: invalid expected_status %d, must be between 100 and 599", ErrConfigValidation, s)
+			}
+		}
+	}
+
+	if step.ResponseBodyLimit == "" {
+		step.ResponseBodyLimit = DefaultResponseBodyLimitStr
+	}
+	limitBytes, err := ParseByteSize(step.ResponseBodyLimit)
+	if err != nil {
+		return fmt.Errorf("%w: invalid step response_body_limit: %w", ErrConfigValidation, err)
+	}
+	if limitBytes <= 0 {
+		return fmt.Errorf("%w: step response_body_limit must be > 0", ErrConfigValidation)
+	}
+	if limitBytes > MaxResponseBodyLimitBytes {
+		return fmt.Errorf("%w: step response_body_limit %d exceeds hard safety limit %d", ErrConfigValidation, limitBytes, MaxResponseBodyLimitBytes)
+	}
+
+	if step.Redirects == "" {
+		step.Redirects = DefaultRedirects
+	}
+	switch step.Redirects {
+	case RedirectPolicySameOrigin, RedirectPolicyNone, RedirectPolicyAll:
+		// Valid
+	default:
+		return fmt.Errorf("%w: invalid step redirects %q, must be 'same-origin', 'none', or 'all'", ErrConfigValidation, step.Redirects)
+	}
+
+	if step.ThinkTime.Duration() < 0 {
+		return fmt.Errorf("%w: step think_time cannot be negative", ErrConfigValidation)
+	}
+
+	onFailure := strings.ToLower(strings.TrimSpace(step.OnFailure))
+	if onFailure == "" {
+		onFailure = OnFailureStop
+	}
+	switch onFailure {
+	case OnFailureStop, OnFailureAbortVU, OnFailureContinue:
+		step.OnFailure = onFailure
+	default:
+		return fmt.Errorf("%w: invalid on_failure policy %q, must be 'stop', 'abort_vu', or 'continue'", ErrConfigValidation, step.OnFailure)
+	}
+
+	for varName, rule := range step.Extract {
+		trimmedVar := strings.TrimSpace(varName)
+		if trimmedVar == "" {
+			return fmt.Errorf("%w: extraction variable name cannot be empty", ErrConfigValidation)
+		}
+		from := strings.ToLower(strings.TrimSpace(rule.From))
+		switch from {
+		case ExtractSourceJSON, ExtractSourceJSONPath, ExtractSourceHeader, ExtractSourceCookie, ExtractSourceRegex:
+			// Valid
+		default:
+			return fmt.Errorf("%w: invalid extraction source %q for variable %q, must be 'json', 'jsonpath', 'header', 'cookie', or 'regex'", ErrConfigValidation, rule.From, varName)
+		}
+		expr := strings.TrimSpace(rule.Expression)
+		if expr == "" {
+			return fmt.Errorf("%w: extraction expression for variable %q cannot be empty", ErrConfigValidation, varName)
+		}
+		if from == ExtractSourceRegex {
+			if _, rErr := regexp.Compile(expr); rErr != nil {
+				return fmt.Errorf("%w: invalid regex expression %q for variable %q: %w", ErrConfigValidation, expr, varName, rErr)
 			}
 		}
 	}

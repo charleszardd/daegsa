@@ -23,9 +23,24 @@ func ParseThreshold(metricName string, expr string) (*Threshold, error) {
 		return nil, fmt.Errorf("%w: threshold metric name cannot be empty", ErrInvalidThreshold)
 	}
 
-	category, exists := CanonicalMetricCategories[trimmedMetric]
+	var stepName string
+	canonicalMetric := trimmedMetric
+
+	if strings.HasPrefix(trimmedMetric, "step.") {
+		parts := strings.Split(trimmedMetric, ".")
+		if len(parts) != 3 || parts[0] != "step" {
+			return nil, fmt.Errorf("%w: invalid step threshold metric syntax %q (expected step.<step_name>.<metric>)", ErrInvalidThreshold, trimmedMetric)
+		}
+		stepName = strings.TrimSpace(parts[1])
+		canonicalMetric = strings.TrimSpace(parts[2])
+		if stepName == "" || canonicalMetric == "" {
+			return nil, fmt.Errorf("%w: step name and metric cannot be empty in %q", ErrInvalidThreshold, trimmedMetric)
+		}
+	}
+
+	category, exists := CanonicalMetricCategories[canonicalMetric]
 	if !exists {
-		return nil, fmt.Errorf("%w: unknown threshold metric %q", ErrInvalidThreshold, trimmedMetric)
+		return nil, fmt.Errorf("%w: unknown threshold metric %q", ErrInvalidThreshold, canonicalMetric)
 	}
 
 	trimmedExpr := strings.TrimSpace(expr)
@@ -59,13 +74,14 @@ func ParseThreshold(metricName string, expr string) (*Threshold, error) {
 			ErrInvalidThreshold, trimmedMetric, expr)
 	}
 
-	targetValue, unit, err := parseTargetValueAndUnit(trimmedMetric, category, targetStr)
+	targetValue, unit, err := parseTargetValueAndUnit(canonicalMetric, category, targetStr)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Threshold{
 		MetricName:    trimmedMetric,
+		StepName:      stepName,
 		Category:      category,
 		Operator:      op,
 		TargetRaw:     targetStr,

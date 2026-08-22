@@ -36,6 +36,14 @@ type LatencySummary struct {
 	ExpectedSuccess LatencyPercentiles `json:"expected_success"`
 }
 
+// ScenarioIterationCounts aggregates scenario iteration lifecycle counters (§9, §13).
+type ScenarioIterationCounts struct {
+	Planned   int64 `json:"planned"`
+	Started   int64 `json:"started"`
+	Completed int64 `json:"completed"`
+	Failed    int64 `json:"failed"`
+}
+
 // AggregatedMetrics holds the centrally merged metrics from all workers (§4, §9, §13).
 type AggregatedMetrics struct {
 	RequestCounts         RequestCounts
@@ -57,6 +65,8 @@ type AggregatedMetrics struct {
 	FirstThrottleOffsetNS int64
 	Segments              []SegmentMetrics
 	Measured              *AggregatedMetrics
+	Steps                 map[string]*AggregatedMetrics
+	ScenarioIterations    ScenarioIterationCounts
 }
 
 // MergeWorkers merges worker-local metric accumulators into a unified AggregatedMetrics snapshot (§4, §9, §13).
@@ -77,6 +87,7 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 	var rateLimitHeaders []RateLimitHeaderSample
 	headerConsistency := make(map[string]HeaderConsistency)
 	var mergedErrors []ErrorSample
+	var scenarioIters ScenarioIterationCounts
 	var schedulerLagMaxMS float64
 	firstThrottleOffsetNS := int64(-1)
 
@@ -92,6 +103,12 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 		reqCounts.Completed += w.Completed
 		reqCounts.Canceled += w.Canceled
 		reqCounts.Dropped += w.Dropped
+
+		// Merge scenario iteration counts
+		scenarioIters.Planned += w.ScenarioIterations.Planned
+		scenarioIters.Started += w.ScenarioIterations.Started
+		scenarioIters.Completed += w.ScenarioIterations.Completed
+		scenarioIters.Failed += w.ScenarioIterations.Failed
 
 		// Merge outcomes
 		for o, count := range w.Outcomes {
@@ -182,6 +199,12 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 		rateLimitedRate = (float64(rateLimitCount) / float64(reqCounts.Completed)) * 100.0
 	}
 
+	// Merge step-level metrics if any step workers exist (§9)
+	stepAggs, stepMergeErr := MergeStepWorkers(workers, duration)
+	if stepMergeErr != nil {
+		return nil, stepMergeErr
+	}
+
 	return &AggregatedMetrics{
 		RequestCounts:      reqCounts,
 		Outcomes:           outcomes,
@@ -205,7 +228,46 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 		ErrorSamples:          mergedErrors,
 		SchedulerLagMaxMS:     schedulerLagMaxMS,
 		FirstThrottleOffsetNS: firstThrottleOffsetNS,
+		Steps:                 stepAggs,
+		ScenarioIterations:    scenarioIters,
 	}, nil
+}
+
+// MergeStepWorkers aggregates step-specific worker metrics across all VUs into unified step aggregates (§9).
+func MergeStepWorkers(workers []*WorkerMetrics, duration time.Duration) (map[string]*AggregatedMetrics, error) {
+	stepNames := make(map[string]struct{})
+	for _, w := range workers {
+		if w == nil {
+			continue
+		}
+		for name := range w.StepWorkers {
+			stepNames[name] = struct{}{}
+		}
+	}
+
+	if len(stepNames) == 0 {
+		return nil, nil
+	}
+
+	stepAggs := make(map[string]*AggregatedMetrics, len(stepNames))
+	for stepName := range stepNames {
+		stepWorkerList := make([]*WorkerMetrics, 0, len(workers))
+		for _, w := range workers {
+			if w != nil && w.StepWorkers != nil {
+				if sw, exists := w.StepWorkers[stepName]; exists && sw != nil {
+					stepWorkerList = append(stepWorkerList, sw)
+				}
+			}
+		}
+
+		stepAgg, err := MergeWorkers(stepWorkerList, duration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge step %q metrics: %w", stepName, err)
+		}
+		stepAggs[stepName] = stepAgg
+	}
+
+	return stepAggs, nil
 }
 
 func calculateLatencyPercentiles(h Histogram) LatencyPercentiles {
@@ -262,4 +324,16 @@ func (a *AggregatedMetrics) ToThresholdSnapshot() threshold.MetricsSnapshot {
 		ErrorRate:           a.ErrorRate,
 		RateLimitedRate:     a.RateLimitedRate,
 	}
+}
+
+// ToStepThresholdSnapshots extracts individual MetricsSnapshot maps for each step (§9, §10).
+func (a *AggregatedMetrics) ToStepThresholdSnapshots() map[string]threshold.MetricsSnapshot {
+	if a == nil || len(a.Steps) == 0 {
+		return nil
+	}
+	res := make(map[string]threshold.MetricsSnapshot, len(a.Steps))
+	for stepName, stepAgg := range a.Steps {
+		res[stepName] = stepAgg.ToThresholdSnapshot()
+	}
+	return res
 }

@@ -170,3 +170,352 @@ func TestValidateConfig_AuthValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateConfig_ScenarioValidation(t *testing.T) {
+	validSteps := func() []config.StepConfig {
+		return []config.StepConfig{
+			{
+				Name:   "login",
+				URL:    "https://api.example.com/login",
+				Method: "POST",
+				Body:   `{"user":"test"}`,
+				Extract: map[string]config.ExtractRuleConfig{
+					"token": {
+						From:       "json",
+						Expression: "token",
+					},
+					"cookie_val": {
+						From:       "cookie",
+						Expression: "session_id",
+					},
+				},
+				OnFailure: "stop",
+			},
+			{
+				Name:   "get_items",
+				URL:    "https://api.example.com/items",
+				Method: "GET",
+				Headers: map[string]string{
+					"Authorization": "Bearer ${token}",
+				},
+				ThinkTime: config.Duration(100 * time.Millisecond),
+				Extract: map[string]config.ExtractRuleConfig{
+					"first_id": {
+						From:       "jsonpath",
+						Expression: "$.items[0].id",
+					},
+					"header_val": {
+						From:       "header",
+						Expression: "X-Request-Id",
+					},
+					"regex_val": {
+						From:       "regex",
+						Expression: "id=([0-9]+)",
+					},
+				},
+				OnFailure: "continue",
+			},
+			{
+				Name:      "logout",
+				URL:       "https://api.example.com/logout",
+				Method:    "POST",
+				OnFailure: "abort_vu",
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		mutate    func(cfg *config.Config)
+		expectErr bool
+	}{
+		{
+			name: "valid multi-step scenario",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: validSteps(),
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: false,
+		},
+		{
+			name: "mutual exclusivity: both request and scenario defined",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{URL: "https://api.example.com/single", Method: "GET"}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: validSteps(),
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "mutual exclusivity: neither request nor scenario defined",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = nil
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "scenario requires closed model",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: validSteps(),
+				}
+				cfg.Load = config.LoadConfig{
+					Model:       core.WorkloadModelOpen,
+					Rate:        10,
+					MaxInFlight: 10,
+					Duration:    config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "empty scenario name",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "   ",
+					Steps: validSteps(),
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "empty steps slice",
+			mutate: func(cfg *config.Config) {
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: []config.StepConfig{},
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "duplicate step names",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[1].Name = "login" // duplicate with step 0
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "step missing URL",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].URL = ""
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "step unsupported HTTP method",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].Method = "INVALID_METHOD"
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "step negative think time",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].ThinkTime = config.Duration(-1 * time.Second)
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "step invalid on_failure policy",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].OnFailure = "retry_forever"
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "extract rule invalid source",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].Extract["bad"] = config.ExtractRuleConfig{
+					From:       "xpath",
+					Expression: "/root/item",
+				}
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "extract rule empty expression",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].Extract["bad"] = config.ExtractRuleConfig{
+					From:       "json",
+					Expression: "",
+				}
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "extract rule invalid regex syntax",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].Extract["bad"] = config.ExtractRuleConfig{
+					From:       "regex",
+					Expression: "[a-z(",
+				}
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+		{
+			name: "extract rule empty variable name",
+			mutate: func(cfg *config.Config) {
+				steps := validSteps()
+				steps[0].Extract["  "] = config.ExtractRuleConfig{
+					From:       "json",
+					Expression: "token",
+				}
+				cfg.Request = config.RequestConfig{}
+				cfg.Scenario = &config.ScenarioConfig{
+					Name:  "user_journey",
+					Steps: steps,
+				}
+				cfg.Load = config.LoadConfig{
+					Model:    core.WorkloadModelClosed,
+					Users:    10,
+					Duration: config.Duration(10 * time.Second),
+				}
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				SchemaVersion: 1,
+				Name:          "test-config",
+			}
+			tt.mutate(cfg)
+			err := config.ValidateConfig(cfg)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected validation error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected validation error: %v", err)
+				}
+			}
+		})
+	}
+}
