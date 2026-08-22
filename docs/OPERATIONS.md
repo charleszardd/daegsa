@@ -18,8 +18,14 @@
 
 ### Via `go install`
 
+**DAEGSA CLI:**
 ```bash
 go install github.com/charleszardd/daegsa/cmd/daegsa@latest
+```
+
+**DAEGSA Studio (GUI):**
+```bash
+go install github.com/charleszardd/daegsa/cmd/daegsa-gui@latest
 ```
 
 Ensure your Go binary directory (`$GOPATH/bin` or `~/go/bin`, or `%USERPROFILE%\go\bin` on Windows) is in your system `PATH`.

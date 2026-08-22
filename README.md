@@ -20,8 +20,14 @@ The name **DAEGSA** is derived from a blend of concepts representing traffic loa
 
 ### Via `go install`
 
+**DAEGSA CLI:**
 ```bash
 go install github.com/charleszardd/daegsa/cmd/daegsa@latest
+```
+
+**DAEGSA Studio (GUI):**
+```bash
+go install github.com/charleszardd/daegsa/cmd/daegsa-gui@latest
 ```
 
 Ensure your Go bin directory (`$GOPATH/bin` or `~/go/bin`, or `%USERPROFILE%\go\bin` on Windows) is included in your system `PATH`.
@@ -35,9 +41,14 @@ Download pre-compiled release packages for Windows, Linux, and macOS from [GitHu
 ```bash
 git clone https://github.com/charleszardd/daegsa.git
 cd daegsa
+
+# Build CLI
 make build
-# or directly with go:
-# go build -trimpath -o bin/daegsa ./cmd/daegsa
+# or: go build -trimpath -o bin/daegsa ./cmd/daegsa
+
+# Build GUI Studio
+make build-gui
+# or: go build -trimpath -o bin/daegsa-gui ./cmd/daegsa-gui
 ```
 
 ## Quick Start
