@@ -33,7 +33,7 @@ type LineChart struct {
 // Layout renders the line chart.
 func (c LineChart) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
 	if c.Height == 0 {
-		c.Height = unit.Dp(160)
+		c.Height = unit.Dp(170)
 	}
 
 	chartHeightPx := gtx.Dp(c.Height)
@@ -114,15 +114,21 @@ func (c LineChart) Layout(gtx layout.Context, th *material.Theme) layout.Dimensi
 			h := float32(chartHeightPx)
 
 			// Canvas background
-			r := gtx.Dp(unit.Dp(4))
+			r := gtx.Dp(unit.Dp(6))
 			bgShape := clip.RRect{
 				Rect: image.Rect(0, 0, totalWidthPx, chartHeightPx),
 				NW:   r, NE: r, SE: r, SW: r,
 			}
-			paint.FillShape(gtx.Ops, color.NRGBA{R: 13, G: 17, B: 23, A: 200}, bgShape.Op(gtx.Ops))
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 13, G: 17, B: 23, A: 240}, bgShape.Op(gtx.Ops))
+
+			// Subtle canvas border
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 48, G: 54, B: 61, A: 120}, clip.Stroke{
+				Path:  bgShape.Path(gtx.Ops),
+				Width: 1.0,
+			}.Op())
 
 			// Gridlines (4 horizontal divisions)
-			gridColor := color.NRGBA{R: 48, G: 54, B: 61, A: 120}
+			gridColor := color.NRGBA{R: 48, G: 54, B: 61, A: 80}
 			for i := 1; i <= 3; i++ {
 				frac := float32(i) / 4.0
 				yPos := h * (1.0 - frac)
@@ -137,7 +143,7 @@ func (c LineChart) Layout(gtx layout.Context, th *material.Theme) layout.Dimensi
 				}.Op())
 			}
 
-			// Render each series line
+			// Render each series line and area fill
 			strokeWidth := float32(gtx.Dp(unit.Dp(2)))
 			for _, s := range c.Series {
 				n := len(s.Values)
@@ -147,6 +153,31 @@ func (c LineChart) Layout(gtx layout.Context, th *material.Theme) layout.Dimensi
 
 				xStep := w / float32(n-1)
 
+				// Area Fill Path
+				var areaPath clip.Path
+				areaPath.Begin(gtx.Ops)
+				areaPath.MoveTo(f32.Pt(0, h))
+
+				for i, v := range s.Values {
+					x := float32(i) * xStep
+					yFrac := float32(v / maxY)
+					if yFrac > 1.0 {
+						yFrac = 1.0
+					}
+					if yFrac < 0.0 {
+						yFrac = 0.0
+					}
+					y := h * (1.0 - yFrac)
+					areaPath.LineTo(f32.Pt(x, y))
+				}
+				areaPath.LineTo(f32.Pt(w, h))
+				areaPath.Close()
+
+				areaColor := s.Color
+				areaColor.A = 25
+				paint.FillShape(gtx.Ops, areaColor, clip.Outline{Path: areaPath.End()}.Op())
+
+				// Stroke Line Path
 				var linePath clip.Path
 				linePath.Begin(gtx.Ops)
 
@@ -176,7 +207,7 @@ func (c LineChart) Layout(gtx layout.Context, th *material.Theme) layout.Dimensi
 
 			// Top Y-axis value label
 			maxLabel := fmt.Sprintf("%.1f %s", maxY, c.Unit)
-			layout.Inset{Top: unit.Dp(2), Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			layout.Inset{Top: unit.Dp(4), Left: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				lbl := material.Label(th, unit.Sp(9), maxLabel)
 				lbl.Color = color.NRGBA{R: 110, G: 118, B: 129, A: 200}
 				return lbl.Layout(gtx)

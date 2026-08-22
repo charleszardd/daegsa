@@ -31,6 +31,8 @@ func NewDoctorView(s *gui.State) *DoctorView {
 
 // Layout renders the doctor diagnostics view.
 func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions {
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 	if v.diagnoseBtn.Clicked(gtx) {
 		v.State.RunDiagnostics(context.Background())
 	}
@@ -40,6 +42,8 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 	items := []layout.Widget{
 		// Header Action Bar
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			return layout.Flex{
 				Axis:      layout.Horizontal,
 				Alignment: layout.Middle,
@@ -66,11 +70,30 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 
 		// Diagnostic Results or Empty Prompt
 		func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 			if doc == nil {
-				return widgets.Card{}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Body2(th.Material, "Click 'Run Diagnostics' above to inspect OS timer resolution, DNS latency, socket headroom, and system limits.")
-					lbl.Color = th.TextSecondary
-					return lbl.Layout(gtx)
+				return widgets.Card{
+					Title:    "Host Diagnostics Readiness",
+					Subtitle: "Timer precision, DNS resolution, TLS certs, and socket headroom",
+				}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
+					return layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(24)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body1(th.Material, "No diagnostics executed yet.")
+								lbl.Color = th.TextSecondary
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body2(th.Material, "Click 'Run Diagnostics' above to inspect OS timer resolution, DNS latency, socket headroom, and system limits.")
+								lbl.Color = th.TextMuted
+								return lbl.Layout(gtx)
+							}),
+						)
+					})
 				})
 			}
 
@@ -84,6 +107,8 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				// Overall Status Card
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 					return widgets.Card{
 						Title: "Overall Host Readiness",
 						HeaderRight: func(gtx layout.Context) layout.Dimensions {
@@ -93,6 +118,8 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 							}.Layout(gtx, th.Material)
 						},
 					}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 						return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx,
 							layout.Rigid(v.renderInfoItem(th, "Operating System", fmt.Sprintf("%s / %s", doc.System.OS, doc.System.Arch))),
 							layout.Rigid(v.renderInfoItem(th, "CPU Cores", fmt.Sprintf("%d logical (%d GOMAXPROCS)", doc.System.NumCPU, doc.System.GOMAXPROCS))),
@@ -106,7 +133,9 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 
 				// Check Items
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
 					var checkRows []layout.FlexChild
+
 					for _, c := range doc.Checks {
 						checkItem := c
 						bType := widgets.BadgeSuccess
@@ -117,6 +146,8 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 						}
 
 						checkRows = append(checkRows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 							return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 								return widgets.Card{
 									Title: checkItem.Name,
@@ -127,6 +158,8 @@ func (v *DoctorView) Layout(gtx layout.Context, th *gui.Theme) layout.Dimensions
 										}.Layout(gtx, th.Material)
 									},
 								}.Layout(gtx, th.Material, func(gtx layout.Context) layout.Dimensions {
+									gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 									return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 											lbl := material.Body2(th.Material, checkItem.Summary)
