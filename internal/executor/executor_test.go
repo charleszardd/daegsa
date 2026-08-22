@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/plan"
 	"github.com/charleszardd/daegsa/internal/safety"
@@ -228,7 +227,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Same-origin multi-hop redirect (3 hops)
-	pSameOrigin := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=3", "GET", config.RedirectPolicySameOrigin, []int{200}, 0, 0)
+	pSameOrigin := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=3", "GET", core.RedirectPolicySameOrigin, []int{200}, 0, 0)
 	execSameOrigin, _ := NewHTTPExecutor(pSameOrigin)
 	defer execSameOrigin.Close()
 
@@ -241,7 +240,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	}
 
 	// 2. Cross-origin redirect blocked by same-origin policy
-	pCrossBlocked := helperBuildPlan(t, server.URL()+"?redirect_url=http://example.com/external", "GET", config.RedirectPolicySameOrigin, []int{200}, 0, 0)
+	pCrossBlocked := helperBuildPlan(t, server.URL()+"?redirect_url=http://example.com/external", "GET", core.RedirectPolicySameOrigin, []int{200}, 0, 0)
 	execCrossBlocked, _ := NewHTTPExecutor(pCrossBlocked)
 	defer execCrossBlocked.Close()
 
@@ -257,7 +256,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	}
 
 	// 3. Cross-origin redirect with redirects: all and disallowed host
-	pCrossDisallowed := helperBuildPlan(t, server.URL()+"?redirect_url=http://unauthorized.example.com/external", "GET", config.RedirectPolicyAll, []int{200}, 0, 0)
+	pCrossDisallowed := helperBuildPlan(t, server.URL()+"?redirect_url=http://unauthorized.example.com/external", "GET", core.RedirectPolicyAll, []int{200}, 0, 0)
 	pCrossDisallowed.AllowedHosts = []string{"127.0.0.1", "localhost"}
 	execCrossDisallowed, _ := NewHTTPExecutor(pCrossDisallowed)
 	defer execCrossDisallowed.Close()
@@ -268,7 +267,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	}
 
 	// 4. Redirect policy "none"
-	pNone := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=1", "GET", config.RedirectPolicyNone, []int{302}, 0, 0)
+	pNone := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=1", "GET", core.RedirectPolicyNone, []int{302}, 0, 0)
 	execNone, _ := NewHTTPExecutor(pNone)
 	defer execNone.Close()
 
@@ -490,7 +489,7 @@ func TestExecutor_Redirect_LoopExceeded(t *testing.T) {
 
 	ctx := context.Background()
 	// 15 hops exceeds MaxRedirectHops (10)
-	p := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=15", "GET", config.RedirectPolicySameOrigin, []int{200}, 0, 0)
+	p := helperBuildPlan(t, server.URL()+"?redirect_path=/dest&hops=15", "GET", core.RedirectPolicySameOrigin, []int{200}, 0, 0)
 	exec, _ := NewHTTPExecutor(p)
 	defer exec.Close()
 

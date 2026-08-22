@@ -27,11 +27,11 @@ const (
 	MaxResponseBodyLimitBytes  = 50 * 1024 * 1024 // 50 MiB hard safety ceiling
 )
 
-// Allowed redirect policies.
+// Allowed redirect policies (§6, §8).
 const (
-	RedirectPolicySameOrigin = "same-origin"
-	RedirectPolicyNone       = "none"
-	RedirectPolicyAll        = "all"
+	RedirectPolicySameOrigin = core.RedirectPolicySameOrigin
+	RedirectPolicyNone       = core.RedirectPolicyNone
+	RedirectPolicyAll        = core.RedirectPolicyAll
 )
 
 // Duration wraps time.Duration to provide string parsing in YAML and JSON (e.g. "5s", "250ms").

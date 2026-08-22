@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/threshold"
 	"gopkg.in/yaml.v3"
 )
 
@@ -215,23 +216,8 @@ func validateLoadConfig(load *LoadConfig) error {
 
 func validateThresholds(thresholds map[string]string) error {
 	for name, expr := range thresholds {
-		trimmedName := strings.TrimSpace(name)
-		if trimmedName == "" {
-			return fmt.Errorf("%w: threshold name cannot be empty", ErrConfigValidation)
-		}
-		trimmedExpr := strings.TrimSpace(expr)
-		if trimmedExpr == "" {
-			return fmt.Errorf("%w: threshold %q expression cannot be empty", ErrConfigValidation, name)
-		}
-		// Basic format verification: must have an operator (<=, >=, ==, <, >)
-		hasOp := strings.HasPrefix(trimmedExpr, "<=") ||
-			strings.HasPrefix(trimmedExpr, ">=") ||
-			strings.HasPrefix(trimmedExpr, "==") ||
-			strings.HasPrefix(trimmedExpr, "!=") ||
-			strings.HasPrefix(trimmedExpr, "<") ||
-			strings.HasPrefix(trimmedExpr, ">")
-		if !hasOp {
-			return fmt.Errorf("%w: threshold %q expression %q must begin with an operator (<=, >=, ==, <, >)", ErrConfigValidation, name, expr)
+		if _, err := threshold.ParseThreshold(name, expr); err != nil {
+			return fmt.Errorf("%w: %w", ErrConfigValidation, err)
 		}
 	}
 	return nil

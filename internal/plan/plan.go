@@ -10,6 +10,7 @@ import (
 	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/safety"
+	"github.com/charleszardd/daegsa/internal/threshold"
 )
 
 // Plan represents an immutable, validated, fully resolved execution manifest (§4, §6, §7).
@@ -34,6 +35,7 @@ type Plan struct {
 	Users              int64
 	ThinkTime          time.Duration
 	Treat429AsExpected bool
+	Thresholds         []*threshold.Threshold
 	AllowedHosts       []string
 	AllowNonIdempotent bool
 	ResolvedIPs        []net.IP
@@ -93,6 +95,16 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		resolvedIPs[i] = clonedIP
 	}
 
+	// Parse and deep clone Thresholds
+	parsedThresholds, err := threshold.ParseThresholds(cfg.Thresholds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse plan thresholds: %w", err)
+	}
+	clonedThresholds := make([]*threshold.Threshold, len(parsedThresholds))
+	for i, t := range parsedThresholds {
+		clonedThresholds[i] = t.Clone()
+	}
+
 	p := &Plan{
 		Name:               cfg.Name,
 		SchemaVersion:      cfg.SchemaVersion,
@@ -113,10 +125,30 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		Users:              cfg.Load.Users,
 		ThinkTime:          cfg.Load.ThinkTime.Duration(),
 		Treat429AsExpected: cfg.RateLimit.Treat429AsExpected,
+		Thresholds:         clonedThresholds,
 		AllowedHosts:       allowedHosts,
 		AllowNonIdempotent: cfg.Safety.AllowNonIdempotent,
 		ResolvedIPs:        resolvedIPs,
 	}
 
 	return p, nil
+}
+
+// TargetRPS returns the computed target arrival rate per second for open model plans (§7).
+func (p *Plan) TargetRPS() float64 {
+	if p == nil || p.TimeUnit <= 0 {
+		return 0.0
+	}
+	return p.Rate / p.TimeUnit.Seconds()
+}
+
+// ToEvaluationContext constructs the threshold.EvaluationContext for evaluating thresholds against this Plan (§10).
+func (p *Plan) ToEvaluationContext() threshold.EvaluationContext {
+	if p == nil {
+		return threshold.EvaluationContext{}
+	}
+	return threshold.EvaluationContext{
+		TargetRPS:   p.TargetRPS(),
+		MaxInFlight: p.MaxInFlight,
+	}
 }

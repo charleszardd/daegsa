@@ -247,3 +247,105 @@ func TestFormatTerminalReport_OpenModel(t *testing.T) {
 		t.Errorf("missing saturation warning in output")
 	}
 }
+
+func TestFormatTerminalReport_ThresholdEvaluation(t *testing.T) {
+	p := &plan.Plan{
+		Name:     "threshold-eval-test",
+		Model:    core.WorkloadModelClosed,
+		Users:    5,
+		Duration: 5 * time.Second,
+	}
+
+	rep := &Report{
+		ReportSchemaVersion: 1,
+		DurationMS:          5000,
+		RequestCounts: RequestCounts{
+			Planned:   500,
+			Started:   500,
+			Completed: 500,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 500,
+		},
+		Thresholds: []ThresholdResult{
+			{
+				Expression: "http_error_rate <= 1%",
+				Target:     "<= 1%",
+				Observed:   "0.00%",
+				Passed:     true,
+			},
+			{
+				Expression: "p95 <= 500ms",
+				Target:     "<= 500ms",
+				Observed:   "650.00ms",
+				Passed:     false,
+			},
+			{
+				Expression: "completed_rps >= 90",
+				Target:     ">= 90",
+				Observed:   "100.00 req/s",
+				Passed:     true,
+			},
+		},
+		Incomplete: false,
+	}
+
+	output := FormatTerminalReport(rep, p)
+
+	// Verify Threshold Evaluation section
+	if !strings.Contains(output, "THRESHOLD EVALUATION") {
+		t.Errorf("missing THRESHOLD EVALUATION section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "http_error_rate") || !strings.Contains(output, "0.00%") || !strings.Contains(output, "PASS") {
+		t.Errorf("missing passing threshold row in output:\n%s", output)
+	}
+	if !strings.Contains(output, "p95") || !strings.Contains(output, "650.00ms") || !strings.Contains(output, "FAIL") {
+		t.Errorf("missing failing threshold row in output:\n%s", output)
+	}
+	if !strings.Contains(output, "TEST RESULT: FAIL (thresholds failed)") {
+		t.Errorf("expected FAIL (thresholds failed) banner, got:\n%s", output)
+	}
+}
+
+func TestFormatTerminalReport_AllThresholdsPassBanner(t *testing.T) {
+	p := &plan.Plan{
+		Name:     "threshold-pass-test",
+		Model:    core.WorkloadModelClosed,
+		Users:    5,
+		Duration: 5 * time.Second,
+	}
+
+	rep := &Report{
+		ReportSchemaVersion: 1,
+		DurationMS:          5000,
+		RequestCounts: RequestCounts{
+			Planned:   500,
+			Started:   500,
+			Completed: 500,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 500,
+		},
+		Thresholds: []ThresholdResult{
+			{
+				Expression: "http_error_rate <= 1%",
+				Target:     "<= 1%",
+				Observed:   "0.00%",
+				Passed:     true,
+			},
+			{
+				Expression: "p95 <= 500ms",
+				Target:     "<= 500ms",
+				Observed:   "35.00ms",
+				Passed:     true,
+			},
+		},
+		Incomplete: false,
+	}
+
+	output := FormatTerminalReport(rep, p)
+
+	if !strings.Contains(output, "TEST RESULT: PASS") {
+		t.Errorf("expected PASS banner when all thresholds pass, got:\n%s", output)
+	}
+}

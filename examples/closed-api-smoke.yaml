@@ -1,0 +1,35 @@
+schema_version: 1
+name: closed-api-smoke-test
+
+request:
+  url: ${TARGET_URL}/healthz
+  method: GET
+  headers:
+    Accept: application/json
+  expected_statuses: [200]
+  timeout: 2s
+  response_body_limit: 512KB
+  redirects: same-origin
+
+load:
+  model: closed
+  users: 5
+  duration: 10s
+  think_time: 50ms
+  graceful_stop: 2s
+
+rate_limit:
+  treat_429_as_expected: false
+
+thresholds:
+  http_error_rate: "== 0%"
+  p90: "<= 100ms"
+  p99: "<= 200ms"
+  completed_requests: ">= 50"
+
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+    - api.example.com
+  allow_non_idempotent: false

@@ -1,0 +1,60 @@
+name: Performance & Capacity CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  performance-test:
+    name: Run DAEGSA Load & Threshold Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build DAEGSA CLI
+        run: go build -v -o ./bin/daegsa ./cmd/daegsa
+
+      - name: Validate Test Configurations
+        run: |
+          ./bin/daegsa validate --config examples/open-api-capacity.yaml --non-interactive
+          ./bin/daegsa validate --config examples/closed-api-smoke.yaml --non-interactive
+
+      - name: Run Smoke Load Test
+        id: daegsa_smoke
+        env:
+          TARGET_URL: "http://127.0.0.1:8080"
+        run: |
+          ./bin/daegsa run \
+            --config examples/closed-api-smoke.yaml \
+            --output-json report-smoke.json \
+            --non-interactive
+
+      - name: Run Capacity Load Test
+        id: daegsa_capacity
+        if: always()
+        env:
+          TARGET_URL: "http://127.0.0.1:8080"
+        run: |
+          ./bin/daegsa run \
+            --config examples/open-api-capacity.yaml \
+            --output-json report-capacity.json \
+            --non-interactive
+
+      - name: Upload Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daegsa-performance-reports
+          path: |
+            report-smoke.json
+            report-capacity.json

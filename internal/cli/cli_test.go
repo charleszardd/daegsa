@@ -438,3 +438,233 @@ func TestCLI_Run_ExecuteOpenModel_UnexpectedStatus_ReturnsExitCode1(t *testing.T
 		t.Errorf("expected exit code 1 (FAIL_THRESHOLDS) for status 500 in open model, got %d (%s)", code, code)
 	}
 }
+
+func TestCLI_Run_PassingThresholds_ExitCode0(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "threshold_pass.yaml")
+	yamlContent := `
+schema_version: 1
+name: cli-threshold-pass
+request:
+  url: ` + server.URL() + `
+  method: GET
+load:
+  model: closed
+  users: 2
+  duration: 150ms
+thresholds:
+  http_error_rate: "<= 1%"
+  p95: "<= 500ms"
+  completed_requests: ">= 5"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"run", "--config", configFile})
+	if code != core.ExitCodeSuccess {
+		t.Errorf("expected exit code 0 for passing thresholds, got %d (%s)", code, code)
+	}
+}
+
+func TestCLI_Run_FailingThresholds_ExitCode1(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "threshold_fail.yaml")
+	// Target has 50ms delay, threshold requires p95 <= 5ms -> FAIL
+	yamlContent := `
+schema_version: 1
+name: cli-threshold-fail
+request:
+  url: ` + server.URL() + `/?delay=50ms
+  method: GET
+load:
+  model: closed
+  users: 2
+  duration: 150ms
+thresholds:
+  p95: "<= 5ms"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"run", "--config", configFile})
+	if code != core.ExitCodeThresholdFailure {
+		t.Errorf("expected exit code 1 (FAIL_THRESHOLDS) for failing threshold, got %d (%s)", code, code)
+	}
+}
+
+func TestCLI_Run_InvalidThresholdSyntax_ExitCode2(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "bad_threshold.yaml")
+	// Missing operator in threshold expression
+	yamlContent := `
+schema_version: 1
+name: cli-bad-threshold
+request:
+  url: http://127.0.0.1:8080/items
+  method: GET
+load:
+  model: open
+  rate: 10
+  duration: 5s
+  max_in_flight: 50
+thresholds:
+  p95: "500ms"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"validate", "--config", configFile})
+	if code != core.ExitCodeValidationFailure {
+		t.Errorf("expected exit code 2 (VALIDATION_FAILURE) for malformed threshold, got %d (%s)", code, code)
+	}
+}
+
+func TestCLI_Run_Cancellation_ExitCode3_Incomplete(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately before or during run
+	cancel()
+
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL(),
+		"--model", "closed",
+		"--users", "2",
+		"--duration", "1s",
+	})
+
+	if code != core.ExitCodeRuntimeFailure {
+		t.Errorf("expected exit code 3 (RUNTIME_FAILURE) for canceled run, got %d (%s)", code, code)
+	}
+}
+
+func TestCLI_FormatSingleLineSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		code     core.ExitCode
+		contains string
+	}{
+		{
+			name:     "threshold failure summary",
+			err:      errors.New("p95 (650.00ms) failed target <= 500ms"),
+			code:     core.ExitCodeThresholdFailure,
+			contains: "daegsa: threshold failure: p95 (650.00ms) failed target <= 500ms",
+		},
+		{
+			name:     "validation failure summary",
+			err:      errors.New("invalid threshold 'p95': missing operator"),
+			code:     core.ExitCodeValidationFailure,
+			contains: "daegsa: validation failure: invalid threshold 'p95': missing operator",
+		},
+		{
+			name:     "runtime failure summary",
+			err:      errors.New("test execution incomplete (aborted)"),
+			code:     core.ExitCodeRuntimeFailure,
+			contains: "daegsa: runtime failure: test execution incomplete (aborted)",
+		},
+		{
+			name:     "safety refusal summary",
+			err:      errors.New("target host 'evil.com' not in allowed_hosts"),
+			code:     core.ExitCodeSafetyRefusal,
+			contains: "daegsa: safety refusal: target host 'evil.com' not in allowed_hosts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatSingleLineSummary(tt.err, tt.code)
+			if got != tt.contains {
+				t.Errorf("FormatSingleLineSummary() = %q, want %q", got, tt.contains)
+			}
+		})
+	}
+}
+
+func TestCLI_Run_JSONExportWithThresholds(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "json_thresholds.yaml")
+	outJSON := filepath.Join(tmpDir, "report_with_thresholds.json")
+
+	yamlContent := `
+schema_version: 1
+name: cli-json-thresholds
+request:
+  url: ` + server.URL() + `
+  method: GET
+load:
+  model: open
+  rate: 20
+  duration: 150ms
+  max_in_flight: 10
+thresholds:
+  http_error_rate: "<= 1%"
+  p95: "<= 500ms"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"run", "--config", configFile, "--output-json", outJSON})
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read JSON report: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON report: %v", err)
+	}
+
+	thresholds, ok := parsed["thresholds"].([]interface{})
+	if !ok {
+		t.Fatalf("expected thresholds array in report, got %T", parsed["thresholds"])
+	}
+	if len(thresholds) != 2 {
+		t.Fatalf("expected 2 threshold results, got %d", len(thresholds))
+	}
+
+	for i, item := range thresholds {
+		thMap := item.(map[string]interface{})
+		if thMap["passed"] != true {
+			t.Errorf("threshold[%d] passed = %v, want true", i, thMap["passed"])
+		}
+		if thMap["expression"] == "" || thMap["target"] == "" || thMap["observed"] == "" {
+			t.Errorf("threshold[%d] missing fields: %+v", i, thMap)
+		}
+	}
+}

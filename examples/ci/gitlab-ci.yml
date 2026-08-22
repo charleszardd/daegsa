@@ -1,0 +1,28 @@
+stages:
+  - test
+  - performance
+
+variables:
+  GO_VERSION: "1.23"
+
+validate-config:
+  stage: test
+  image: golang:1.23
+  script:
+    - go build -o /usr/local/bin/daegsa ./cmd/daegsa
+    - daegsa validate --config examples/open-api-capacity.yaml --non-interactive
+    - daegsa validate --config examples/closed-api-smoke.yaml --non-interactive
+
+performance-load-test:
+  stage: performance
+  image: golang:1.23
+  variables:
+    TARGET_URL: "http://127.0.0.1:8080"
+  script:
+    - go build -o /usr/local/bin/daegsa ./cmd/daegsa
+    - daegsa run --config examples/open-api-capacity.yaml --output-json report.json --non-interactive
+  artifacts:
+    when: always
+    paths:
+      - report.json
+    expire_in: 1 week

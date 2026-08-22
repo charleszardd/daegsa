@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/threshold"
 )
 
 // RequestCounts aggregates request lifecycle counters (§9, §13).
@@ -41,6 +42,8 @@ type AggregatedMetrics struct {
 	Outcomes            map[core.Outcome]int64
 	StatusCodes         map[string]int64
 	Latency             LatencySummary
+	AllLatencyHist      Histogram
+	SuccessLatencyHist  Histogram
 	RateLimits          RateLimitObservations
 	TotalBytesSent      int64
 	TotalBytesReceived  int64
@@ -169,6 +172,8 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 		Outcomes:            outcomes,
 		StatusCodes:         statusCodes,
 		Latency:             latencySummary,
+		AllLatencyHist:      allLatencyHist,
+		SuccessLatencyHist:  successLatencyHist,
 		RateLimits: RateLimitObservations{
 			Observed429Count:  observed429Count,
 			RetryAfterSamples: retryAfterSamples,
@@ -206,5 +211,37 @@ func calculateLatencyPercentiles(h Histogram) LatencyPercentiles {
 		P90MS:  float64(h.ValueAtQuantile(90.0)) / 1000.0,
 		P95MS:  float64(h.ValueAtQuantile(95.0)) / 1000.0,
 		P99MS:  float64(h.ValueAtQuantile(99.0)) / 1000.0,
+	}
+}
+
+// ToThresholdSnapshot extracts a flat MetricsSnapshot from AggregatedMetrics for threshold evaluation (§9, §10).
+func (a *AggregatedMetrics) ToThresholdSnapshot() threshold.MetricsSnapshot {
+	if a == nil {
+		return threshold.MetricsSnapshot{}
+	}
+	p999 := a.Latency.AllCompleted.P99MS
+	if a.AllLatencyHist != nil && a.AllLatencyHist.Count() > 0 {
+		p999 = float64(a.AllLatencyHist.ValueAtQuantile(99.9)) / 1000.0
+	}
+	return threshold.MetricsSnapshot{
+		PlannedRequests:     a.RequestCounts.Planned,
+		ScheduledRequests:   a.RequestCounts.Scheduled,
+		StartedRequests:     a.RequestCounts.Started,
+		CompletedRequests:   a.RequestCounts.Completed,
+		CanceledRequests:    a.RequestCounts.Canceled,
+		DroppedRequests:     a.RequestCounts.Dropped,
+		SuccessfulRequests:  a.Outcomes[core.OutcomeSuccess],
+		MinLatencyMS:        a.Latency.AllCompleted.MinMS,
+		MaxLatencyMS:        a.Latency.AllCompleted.MaxMS,
+		MeanLatencyMS:       a.Latency.AllCompleted.MeanMS,
+		P50LatencyMS:        a.Latency.AllCompleted.P50MS,
+		P90LatencyMS:        a.Latency.AllCompleted.P90MS,
+		P95LatencyMS:        a.Latency.AllCompleted.P95MS,
+		P99LatencyMS:        a.Latency.AllCompleted.P99MS,
+		P999LatencyMS:       p999,
+		AchievedStartRPS:    a.AchievedStartRPS,
+		CompletedThroughput: a.CompletedThroughput,
+		ErrorRate:           a.ErrorRate,
+		RateLimitedRate:     a.RateLimitedRate,
 	}
 }

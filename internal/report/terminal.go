@@ -175,13 +175,51 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 		sb.WriteString(fmt.Sprintf("  Warnings:          %s\n", strings.Join(rep.GeneratorHealth.SaturationWarnings, "; ")))
 	}
 
-	// 8. Test Result Banner
+	// 8. Threshold Evaluation
+	if len(rep.Thresholds) > 0 {
+		sb.WriteString("\n" + sectionLine + "\n")
+		sb.WriteString("  THRESHOLD EVALUATION\n")
+		sb.WriteString(sectionLine + "\n")
+		sb.WriteString(fmt.Sprintf("  %-30s %-16s %-16s %-8s\n", "Metric", "Target", "Observed", "Status"))
+		for _, tr := range rep.Thresholds {
+			status := "PASS"
+			if !tr.Passed {
+				status = "FAIL"
+			}
+			metricName := tr.Expression
+			if idx := strings.Index(tr.Expression, " "); idx != -1 {
+				metricName = tr.Expression[:idx]
+			}
+			sb.WriteString(fmt.Sprintf("  %-30s %-16s %-16s %-8s\n", metricName, tr.Target, tr.Observed, status))
+		}
+	}
+
+	// 9. Test Result Banner
 	sb.WriteString("\n" + dividerLine + "\n")
 	resultBanner := "PASS"
 	if rep.Incomplete {
 		resultBanner = "INCOMPLETE (run aborted or timed out)"
-	} else if rep.RequestCounts.Completed > 0 && rep.Outcomes[core.OutcomeSuccess] < rep.RequestCounts.Completed {
-		resultBanner = "FAIL (unexpected status codes or errors detected)"
+	} else if len(rep.Thresholds) > 0 {
+		anyFailed := false
+		for _, tr := range rep.Thresholds {
+			if !tr.Passed {
+				anyFailed = true
+				break
+			}
+		}
+		if anyFailed {
+			resultBanner = "FAIL (thresholds failed)"
+		} else {
+			resultBanner = "PASS"
+		}
+	} else if rep.RequestCounts.Completed > 0 {
+		successCount := rep.Outcomes[core.OutcomeSuccess]
+		if p != nil && p.Treat429AsExpected {
+			successCount += rep.Outcomes[core.OutcomeRateLimited]
+		}
+		if successCount < rep.RequestCounts.Completed {
+			resultBanner = "FAIL (unexpected status codes or errors detected)"
+		}
 	}
 	sb.WriteString(fmt.Sprintf("  TEST RESULT: %s\n", resultBanner))
 	sb.WriteString(dividerLine + "\n")

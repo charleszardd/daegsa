@@ -40,7 +40,7 @@ func ExecuteContext(ctx context.Context, args []string) core.ExitCode {
 	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		code := DetermineExitCode(err)
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr, FormatSingleLineSummary(err, code))
 		return code
 	}
 

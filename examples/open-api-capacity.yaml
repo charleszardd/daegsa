@@ -1,0 +1,38 @@
+schema_version: 1
+name: open-api-capacity-test
+
+request:
+  url: ${TARGET_URL}/api/v1/items
+  method: GET
+  headers:
+    Accept: application/json
+    User-Agent: DAEGSA/0.3.0
+  expected_statuses: [200]
+  timeout: 5s
+  response_body_limit: 1MiB
+  redirects: same-origin
+
+load:
+  model: open
+  rate: 100
+  time_unit: 1s
+  max_in_flight: 200
+  duration: 30s
+  graceful_stop: 5s
+
+rate_limit:
+  treat_429_as_expected: false
+
+thresholds:
+  http_error_rate: "<= 1%"
+  p95: "<= 250ms"
+  p99: "<= 500ms"
+  completed_rps: ">= 95 req/s"
+  dropped_requests: "== 0"
+
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+    - api.example.com
+  allow_non_idempotent: false

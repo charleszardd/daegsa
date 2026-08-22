@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charleszardd/daegsa/internal/clock"
@@ -11,6 +12,7 @@ import (
 	"github.com/charleszardd/daegsa/internal/plan"
 	"github.com/charleszardd/daegsa/internal/report"
 	"github.com/charleszardd/daegsa/internal/scheduler"
+	"github.com/charleszardd/daegsa/internal/threshold"
 	"github.com/spf13/cobra"
 )
 
@@ -64,27 +66,56 @@ func newRunCmd() *cobra.Command {
 			endTime := time.Now().UTC()
 			incomplete := (runErr != nil) || (cmd.Context().Err() != nil)
 
-			rep := report.BuildReport(p, agg, health, startTime, endTime, incomplete)
+			// Threshold evaluation (§10)
+			var thresholdResults []report.ThresholdResult
+			allThresholdsPassed := true
+			var evalResults []threshold.Result
 
-			// Print terminal report
+			if p != nil && len(p.Thresholds) > 0 {
+				var evalErr error
+				evalResults, allThresholdsPassed, evalErr = threshold.Evaluate(
+					p.Thresholds,
+					agg.ToThresholdSnapshot(),
+					p.ToEvaluationContext(),
+				)
+				if evalErr != nil {
+					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: fmt.Errorf("threshold evaluation failed: %w", evalErr)}
+				}
+				thresholdResults = threshold.ToReportResults(evalResults)
+			}
+
+			rep := report.BuildReport(p, agg, health, startTime, endTime, incomplete, thresholdResults)
+
+			// Print terminal report (§13)
 			fmt.Print(report.FormatTerminalReport(rep, p))
 
-			// Write JSON report if requested
+			// Write JSON report if requested (§13)
 			if flags.outputJSON != "" {
 				if err := report.WriteJSONReport(flags.outputJSON, rep); err != nil {
 					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
 				}
 			}
 
+			// Incomplete run / runtime failure handling (§10, §13)
 			if runErr != nil {
 				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: runErr}
 			}
-
 			if rep.Incomplete {
-				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: fmt.Errorf("test execution incomplete")}
+				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: fmt.Errorf("test execution incomplete (aborted)")}
 			}
 
-			// Determine test pass/fail
+			// Threshold evaluation pass/fail handling (§10)
+			if p != nil && len(p.Thresholds) > 0 {
+				if !allThresholdsPassed {
+					return &CLIExitError{
+						Code: core.ExitCodeThresholdFailure,
+						Err:  fmt.Errorf("%s", formatThresholdFailures(evalResults)),
+					}
+				}
+				return nil
+			}
+
+			// Default pass/fail handling when no thresholds configured (§10)
 			if rep.RequestCounts.Completed > 0 {
 				successCount := rep.Outcomes[core.OutcomeSuccess]
 				if p.Treat429AsExpected {
@@ -93,7 +124,7 @@ func newRunCmd() *cobra.Command {
 				if successCount < rep.RequestCounts.Completed {
 					return &CLIExitError{
 						Code: core.ExitCodeThresholdFailure,
-						Err:  fmt.Errorf("test completed with %d failures out of %d requests", rep.RequestCounts.Completed-successCount, rep.RequestCounts.Completed),
+						Err:  fmt.Errorf("test completed with %d unexpected errors out of %d requests", rep.RequestCounts.Completed-successCount, rep.RequestCounts.Completed),
 					}
 				}
 			}
@@ -104,4 +135,17 @@ func newRunCmd() *cobra.Command {
 
 	addCommonFlags(cmd.Flags(), &flags)
 	return cmd
+}
+
+func formatThresholdFailures(results []threshold.Result) string {
+	var failures []string
+	for _, r := range results {
+		if !r.Passed {
+			failures = append(failures, fmt.Sprintf("%s (%s) failed target %s", r.MetricName, r.ObservedFormatted, r.TargetFormatted))
+		}
+	}
+	if len(failures) == 0 {
+		return "one or more thresholds failed"
+	}
+	return strings.Join(failures, "; ")
 }

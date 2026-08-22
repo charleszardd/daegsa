@@ -118,3 +118,67 @@ func TestFormatPlanSummary_RedactsSecrets(t *testing.T) {
 		t.Errorf("missing headline in summary")
 	}
 }
+
+func TestBuildPlan_ThresholdsImmutability(t *testing.T) {
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Name:          "plan-thresholds-test",
+		Request: config.RequestConfig{
+			URL:               "http://127.0.0.1:8080/api",
+			Method:            "GET",
+			ResponseBodyLimit: "1MiB",
+		},
+		Load: config.LoadConfig{
+			Model:       core.WorkloadModelOpen,
+			Rate:        100,
+			TimeUnit:    config.Duration(1 * time.Second),
+			MaxInFlight: 50,
+			Duration:    config.Duration(10 * time.Second),
+		},
+		Thresholds: map[string]string{
+			"http_error_rate": "<= 1%",
+			"p95":             "<= 500ms",
+			"completed_rps":   ">= 90",
+		},
+	}
+
+	targetURL, _ := url.Parse("http://127.0.0.1:8080/api")
+	preflight := &safety.PreflightResult{
+		TargetURL:   targetURL,
+		Method:      "GET",
+		ResolvedIPs: []net.IP{net.ParseIP("127.0.0.1")},
+		Authorized:  true,
+	}
+
+	p, err := BuildPlan(cfg, preflight)
+	if err != nil {
+		t.Fatalf("BuildPlan failed: %v", err)
+	}
+
+	if len(p.Thresholds) != 3 {
+		t.Fatalf("expected 3 thresholds in plan, got %d", len(p.Thresholds))
+	}
+
+	// Mutate source config map
+	cfg.Thresholds["http_error_rate"] = "<= 50%"
+	cfg.Thresholds["new_metric"] = "<= 100ms"
+
+	// Verify plan was unaffected
+	for _, th := range p.Thresholds {
+		if th.MetricName == "http_error_rate" && th.TargetValue != 1.0 {
+			t.Errorf("Plan Threshold mutated: expected target 1.0, got %g", th.TargetValue)
+		}
+	}
+	if len(p.Thresholds) != 3 {
+		t.Errorf("Plan Thresholds length mutated: got %d", len(p.Thresholds))
+	}
+
+	// Test ToEvaluationContext
+	evalCtx := p.ToEvaluationContext()
+	if evalCtx.TargetRPS != 100.0 {
+		t.Errorf("TargetRPS = %g, want 100.0", evalCtx.TargetRPS)
+	}
+	if evalCtx.MaxInFlight != 50 {
+		t.Errorf("MaxInFlight = %d, want 50", evalCtx.MaxInFlight)
+	}
+}
