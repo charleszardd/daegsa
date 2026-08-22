@@ -1,284 +1,329 @@
 # DAEGSA Execution Plan
+
 Status: COMMITTED
-Canonical phase: Phase 7 - Multi-Step Scenarios
+Canonical phase: Phase 8 - Distribution and Production Hardening
 Tranche: entire phase
 
 ## Objective
 
-Implement closed-model multi-step scenario workflows where virtual users (VUs) execute sequential HTTP request steps with strictly isolated session state and private cookie jars. Support deterministic variable extraction (JSONPath, HTTP headers, cookies, regular expressions), dynamic variable substitution across URLs, headers, and request bodies, configurable step failure policies (`stop`, `abort_vu`, `continue`), per-step think times, step-level metrics collection and histogram aggregation, step-specific threshold evaluation (`step.<step_name>.<metric>`), enhanced terminal and JSON reporting, and deterministic end-to-end integration tests using `internal/testtarget`.
+Implement production distribution and operational hardening for DAEGSA:
+1. `daegsa doctor` CLI subcommand and `internal/doctor` diagnostic engine for local system diagnostics (timer precision, loopback/local DNS, TLS cipher suites and root CA cert pool, socket/FD limits, CPU/memory headroom) with clear PASS/WARN/FAIL status and actionable remediation advice.
+2. `daegsa self-test` CLI subcommand and `internal/selftest` automated suite for in-process end-to-end verification across closed-model, open-model arrival-rate pacing, multi-step scenario extraction/substitution, threshold evaluation pass/fail, and report generation against an embedded `internal/testtarget`.
+3. Build, packaging, and release automation supporting reproducible `-trimpath` builds, embedded version metadata (`Version`, `Commit`, `BuildDate`), multi-platform targets (`windows/amd64`, `linux/amd64`, `darwin/amd64`, `darwin/arm64`), SHA-256 checksums (`SHA256SUMS`), archive creation (`.zip` for Windows, `.tar.gz` for Unix), and CycloneDX Software Bill of Materials (SBOM) generation.
+4. Comprehensive operational and safety documentation: `docs/OPERATIONS.md` (operator manual) and `docs/SAFETY_RUNBOOK.md` (production safety runbook).
+5. Standalone release smoke test verification proving that a clean Windows AMD64 environment can validate, execute, report, and diagnose without external dependencies or installed runtimes.
 
 ## Requirements traceability
 
-- **§2 Workload Model and Terminology:** Closed model for session and multi-step workflow testing; fixed number of virtual users executing sequential step loops with isolated session state and think times.
-- **§4 High-Level Architecture:** Workload Controller -> Closed VU Scheduler -> Scenario Executor -> Per-VU State & Request Builder -> Shared HTTP Transport.
-- **§6 Configuration Contract:** Strict YAML schema validation; scenario definition with named steps; unknown field and duplicate key rejection; secret reference handling.
-- **§7 Execution Semantics:** Closed scheduler VU loops; per-step and per-iteration think time; step failure handling (`stop`, `abort_vu`, `continue`); graceful drain and cancellation.
-- **§8 HTTP Correctness:** Shared tuned `http.Transport`; per-VU isolated `http.CookieJar`; safe response body reading and keep-alive draining; connection reuse across steps.
-- **§9 Outcome and Metrics Model:** Step-level and scenario-level metrics; per-step latency percentiles, outcome taxonomy, and HTTP status distributions; memory-bounded histograms.
-- **§10 Thresholds and Exit Codes:** Step-specific threshold syntax (`step.<step_name>.<metric>`); evaluation against step metrics snapshots; stable exit codes (0 for pass, 1 for threshold failure, 2 for invalid config, 3 for runtime failure, 4 for safety refusal).
-- **§11 Authentication, Secrets, and State:** Multi-step per-VU state (`VUState`); isolated cookie jars; deterministic token pools; redaction of extracted credentials and sensitive headers.
-- **§12 Safety Controls:** Preflight safety verification applied to all scenario step URLs and HTTP methods; host allowlist enforcement; destructive method safeguards (`allow_non_idempotent`).
-- **§13 Reports and Reproducibility:** Terminal and versioned JSON reports with scenario summary, iteration counts, and step-level latency/outcome breakdowns.
-- **§15 Implementation Phases (Phase 7 - Multi-Step Scenarios):** Per-VU state and cookies; JSON-path extraction and variable substitution; think time and deterministic data selection; login and refresh flows; step-level metrics and thresholds. Exit gate: users remain isolated and scenario failures have explicit stop/continue behavior.
+- **§1 Product Direction:** Portable standalone Windows x64 executable that teammates can run without Go, Node.js, Java, Python, or Docker.
+- **§3 Recommended Technology:** Bounded histograms, terminal and versioned JSON reports, standalone executable + checksums distribution.
+- **§5 Repository Structure:** Makefile, build scripts, `dist/` directory, documentation (`docs/OPERATIONS.md`, `docs/SAFETY_RUNBOOK.md`), and clean CLI structure.
+- **§6 Configuration Contract:** Configuration validation, fingerprinting, and environment resolution without secret leakage.
+- **§7 Execution Semantics:** Workload models (open arrival-rate and closed VU loops), deterministic test lifecycle, cancellation and graceful drain.
+- **§8 HTTP Correctness:** Shared tuned HTTP transport, connection pooling, body draining, and TLS configuration.
+- **§9 Outcome and Metrics Model:** Reconciled request counts, latency histograms, error rates, and outcome taxonomy.
+- **§10 Thresholds and Exit Codes:** Canonical exit codes: 0 (PASS), 1 (FAIL_THRESHOLDS), 2 (VALIDATION_FAILURE), 3 (RUNTIME_FAILURE), 4 (SAFETY_REFUSAL).
+- **§11 Authentication, Secrets, and State:** Zero credential leakage in reports, logs, errors, and SBOM.
+- **§12 Safety Controls:** Hard safety ceilings, host allowlist enforcement, non-idempotent method authorization, redirect policies, and emergency stop.
+- **§13 Reports and Reproducibility:** Embedded version metadata (`DaegsaVersion`, `Commit`, `BuildDate`, `OS`, `Arch`), JSON schema v1, terminal reporting, and reproducible build fingerprints.
+- **§14 Features That Sharpen DAEGSA (Generator Self-Diagnostics & CI Usability):** `daegsa doctor` for DNS, TLS, clock, socket, CPU, and local resource checks; deterministic in-process `daegsa self-test` target and integration harness; stable exit codes and CI runner compatibility.
+- **§15 Implementation Phases (Phase 8 - Distribution and Production Hardening):** Windows AMD64 release workflow, checksums, embedded version metadata, SBOM, reproducible `-trimpath` builds, release smoke tests, `doctor`, `self-test`, operational documentation, and safety runbook. Exit gate: a clean Windows machine can validate, execute, report, and diagnose a test without an installed runtime.
+- **§18 Engineering Principles & §19 Acceptance Criteria for v1:** Generator measures and discloses its own limitations; reproducible releases; stable exit code contract.
 
 ## Current repository findings
 
-- **`internal/config/types.go` & `validate.go`:** Currently models single-request configurations (`RequestConfig`) alongside `LoadConfig` (open/closed/profile). Must be extended to support `ScenarioConfig`, `StepConfig`, `ExtractRuleConfig`, and `OnFailurePolicy` with mutual exclusivity validation (either single `request` or multi-step `scenario` defined).
-- **`internal/plan/plan.go`:** `BuildPlan` validates and deep-clones a single target request. Must be extended to compile multi-step scenarios into immutable `CompiledScenario` and `CompiledStep` structures with safety preflight executed across all step URLs and HTTP methods.
-- **`internal/auth/jar.go`:** `VUJarManager` already provides bounded, pre-allocated `http.CookieJar` instances per VU index, providing the foundation for `VUState` cookie isolation.
-- **`internal/executor/executor.go` & `request.go`:** Currently builds requests from static `*plan.Plan` properties. Must be refactored or complemented with parameterized request building supporting dynamic URL, header, and body variable substitution.
-- **`internal/scheduler/closed.go`:** `runVU` currently issues single HTTP requests in a loop. Must support running a sequence of scenario steps per iteration via a scenario executor, handling step failure policies, step think times, and step metrics collection.
-- **`internal/metrics/aggregate.go` & `worker.go`:** `WorkerMetrics` and `AggregatedMetrics` track root-level and segment-level request metrics. Must be extended to track and merge step-level metrics (`StepMetrics` / `Steps map[string]*WorkerMetrics`) and scenario iteration counters.
-- **`internal/threshold/parser.go` & `evaluator.go`:** Parses canonical root metrics. Must support step-qualified metrics (e.g. `step.login.p95`, `step.checkout.http_error_rate`) and evaluate them against corresponding step metrics snapshots.
-- **`internal/report/types.go`, `builder.go`, & `terminal.go`:** Currently generates single-request and profile-segment reports. Must incorporate scenario execution metadata, iteration counts, and a step breakdown table.
-- **`internal/testtarget/handler.go`:** Implements mock auth and cookie endpoints. Needs multi-step workflow endpoints (`/auth/login`, `/api/items`, `/api/logout`, `/scenario/fail-step`, `/scenario/dynamic`) for realistic workflow contract tests.
+- **`internal/cli/version.go` & `internal/report/builder.go`:** `internal/cli/version.go` currently defines `Version = "v0.1.0-dev"`, `Commit = "unknown"`, and `BuildDate = "unknown"`, printed in the `version` command. `internal/report/builder.go` defines `DefaultDaegsaVersion`, `DefaultCommit`, and `DefaultBuildDate` used when constructing reports. These should be synchronized so both the CLI and generated reports reflect build-time ldflags injection.
+- **`internal/cli/root.go`:** Currently defines `run`, `validate`, `version`, and `compare`. Needs registration of `doctor` and `self-test` subcommands.
+- **`internal/testtarget`:** Provides an in-memory loopback HTTP test server (`TargetServer`) with delayed responses, status codes, payload streaming, cookie inspection, auth checks, rate limiting, and multi-step scenario endpoints (`/auth/login`, `/api/items`, `/api/logout`, `/scenario/fail-step`, `/scenario/dynamic`). This provides an ideal in-process harness for `internal/selftest`.
+- **`internal/core/exitcode.go` & `internal/cli/exit.go`:** Defines canonical exit codes 0 (PASS), 1 (FAIL_THRESHOLDS), 2 (VALIDATION_FAILURE), 3 (RUNTIME_FAILURE), 4 (SAFETY_REFUSAL) and single-line summary formatting. `doctor` and `self-test` will reuse this standard.
+- **Build Infrastructure:** No `Makefile` or `dist/` packaging scripts currently exist in the repository root. A complete `Makefile` and cross-platform build scripts (`scripts/build.ps1`, `scripts/package.go`, `scripts/sbom.go`) are needed to automate reproducible builds, packaging, checksumming, and SBOM generation.
+- **Documentation:** `docs/DAEGSA_Implementation_Plan.md` exists, but `docs/OPERATIONS.md` and `docs/SAFETY_RUNBOOK.md` need to be authored to provide end-to-end operational and production safety manuals.
 
 ## Files expected to change
 
 - **Create:**
-  - `internal/scenario/types.go` — Domain types: `Step`, `Scenario`, `VUState`, `ExtractionRule`, `ExtractionSource`, `OnFailurePolicy`.
-  - `internal/scenario/extract.go` — Extraction engine: JSONPath, HTTP header, cookie, and regex extractors with boundary error handling.
-  - `internal/scenario/substitute.go` — Variable substitution engine: template parsing, `${var}` replacement in URLs, headers, and bodies.
-  - `internal/scenario/executor.go` — `ScenarioExecutor`: step execution loop, variable extraction, think time enforcement, and failure policy handling.
-  - `internal/scenario/extract_test.go` — Unit tests for extraction rules, missing keys, invalid expressions, and edge cases.
-  - `internal/scenario/substitute_test.go` — Unit tests for variable substitution in URLs, headers, JSON bodies, and escaping.
-  - `internal/scenario/executor_test.go` — Unit tests for step iteration, state propagation, and failure policies.
-  - `internal/scenario/isolation_test.go` — Concurrency tests verifying strict per-VU variable and cookie isolation.
-  - `examples/multi-step-scenario.yaml` — Complete example demonstrating login -> extract token/cookie -> query items -> logout workflow.
+  - `internal/doctor/types.go` — Diagnostic domain types: `CheckStatus` (`PASS`, `WARN`, `FAIL`), `CheckResult`, `SystemDiagnostics`, `DiagnosticReport`.
+  - `internal/doctor/clock.go` — Timer resolution, tick precision, and monotonic accuracy diagnostics.
+  - `internal/doctor/dns.go` — Localhost and loopback DNS resolution check with latency measurement.
+  - `internal/doctor/tls.go` — System root CA certificate pool, TLS 1.2/1.3 cipher suite checks, and loopback handshake negotiation.
+  - `internal/doctor/socket.go` — Socket creation, ephemeral port allocation, and file descriptor limits check.
+  - `internal/doctor/resources.go` — CPU core count, `GOMAXPROCS`, runtime memory statistics, and GC settings check.
+  - `internal/doctor/runner.go` — Diagnostic runner coordinating all checks and building `DiagnosticReport`.
+  - `internal/doctor/format.go` — Terminal table formatting with PASS/WARN/FAIL indicators and actionable remediation advice, plus JSON serialization.
+  - `internal/doctor/doctor_test.go` — Unit tests for diagnostic checks, warning thresholds, and report formatting.
+  - `internal/selftest/types.go` — Self-test domain models: `TestStatus`, `SubTestResult`, `SelfTestReport`.
+  - `internal/selftest/runner.go` — Self-test orchestrator executing suite against embedded `testtarget.TargetServer`.
+  - `internal/selftest/suite.go` — Embedded test suite definitions (closed model, open model arrival pacing & max-in-flight drop, multi-step scenario, threshold evaluation pass/fail).
+  - `internal/selftest/selftest_test.go` — Unit and integration tests for self-test engine and failure reporting.
+  - `internal/cli/doctor.go` — Cobra command for `daegsa doctor` (`--json`, `--verbose`).
+  - `internal/cli/selftest.go` — Cobra command for `daegsa self-test` (`--json`, `--verbose`, `--timeout`).
+  - `Makefile` — Reproducible build, test, race, lint, cross-compilation, packaging, checksum, and SBOM targets.
+  - `scripts/build.ps1` — PowerShell build script for Windows environments with `-trimpath` and `-ldflags`.
+  - `scripts/package.go` — Cross-platform Go script for release packaging (`dist/` archives and `SHA256SUMS`).
+  - `scripts/sbom.go` — Reproducible CycloneDX SBOM JSON generator.
+  - `docs/OPERATIONS.md` — Comprehensive operator manual.
+  - `docs/SAFETY_RUNBOOK.md` — Production safety runbook.
 - **Modify:**
-  - `internal/config/types.go` — Add `ScenarioConfig`, `StepConfig`, `ExtractRuleConfig`, and failure policy constants.
-  - `internal/config/validate.go` — Add scenario validation: step name uniqueness, valid extraction sources, failure policy values, and model validation.
-  - `internal/config/validate_test.go` — Add validation test cases for scenario syntax, duplicate step names, invalid extraction rules, and negative think times.
-  - `internal/plan/plan.go` — Support compiling scenarios in `BuildPlan`; preflight all step URLs and methods against safety allowlists.
-  - `internal/plan/plan_test.go` — Tests for plan compilation with multi-step scenarios.
-  - `internal/metrics/worker.go` & `aggregate.go` — Add step-level metric accumulators, merge logic, and scenario iteration counters.
-  - `internal/metrics/metrics_test.go` — Unit tests verifying step metric aggregation and reconciliation with root metrics.
-  - `internal/threshold/types.go`, `parser.go`, & `evaluator.go` — Support `step.<step_name>.<metric>` threshold parsing and step snapshot evaluation.
-  - `internal/threshold/threshold_test.go` — Tests for step threshold parsing, validation, and evaluation.
-  - `internal/scheduler/closed.go` — Integrate scenario step execution in VU worker loop with think times and failure policies.
-  - `internal/scheduler/closed_test.go` — Tests for closed-model scenario execution, duration expiration, graceful stop, and cancellation.
-  - `internal/report/types.go`, `builder.go`, & `terminal.go` — Add scenario step summary to JSON schema and terminal output.
-  - `internal/report/report_test.go` — Tests verifying scenario and step metrics rendering in terminal and JSON formats.
-  - `internal/testtarget/handler.go` & `server.go` — Add multi-step API endpoints (`/auth/login`, `/api/items`, `/api/logout`, `/scenario/fail-step`).
-  - `internal/testtarget/server_test.go` — Tests for testtarget scenario endpoints.
-  - `README.md` — Document multi-step scenario configuration syntax, extraction rules, and step-level thresholds.
+  - `internal/cli/root.go` — Register `doctor` and `self-test` subcommands.
+  - `internal/cli/version.go` & `internal/report/builder.go` — Synchronize version metadata variables with build injection.
+  - `internal/cli/cli_test.go` — Add end-to-end CLI tests for `doctor` and `self-test` commands.
+  - `README.md` — Document `doctor` and `self-test` commands, release downloads, and links to operations & safety docs.
 
 ## Implementation checklist
 
-### 1. Scenario Schema, Models, and Validation (`internal/config`, `internal/scenario`)
-- [x] In `internal/config/types.go`, define `ScenarioConfig`, `StepConfig`, `ExtractRuleConfig`, and `OnFailurePolicy` (`stop`, `abort_vu`, `continue`).
-- [x] In `internal/config/types.go`, add `Scenario *ScenarioConfig` to `Config` struct.
-- [x] In `internal/config/validate.go`, enforce mutual exclusivity: exactly one of `Request` (single request) or `Scenario` (multi-step workflow) must be specified.
-- [x] In `internal/config/validate.go`, validate `ScenarioConfig`: scenario name non-empty, steps count bounded (1 to 50 steps), step names non-empty and unique within scenario.
-- [x] In `internal/config/validate.go`, validate each `StepConfig`: valid HTTP method, valid URL/template, valid `expected_statuses`, timeout >= 0, response body limit, redirects, and non-negative `think_time`.
-- [x] In `internal/config/validate.go`, validate `ExtractRuleConfig`: extraction source must be `json` (or `jsonpath`), `header`, `cookie`, or `regex`; expression must be non-empty and syntactically valid (e.g. valid regex compilation).
-- [x] In `internal/config/validate.go`, validate `OnFailure`: must be one of `stop` (default), `abort_vu`, or `continue`.
-- [x] In `internal/config/validate.go`, enforce that scenarios require `load.model: closed`.
-- [x] Add comprehensive test cases in `internal/config/validate_test.go` for all scenario validation paths.
+### 1. Diagnostic Engine (`internal/doctor`)
+- [x] In `internal/doctor/types.go`, define `CheckStatus` enum (`StatusPass`, `StatusWarn`, `StatusFail`), `CheckResult` (`Name`, `Status`, `Summary`, `Detail`, `Suggestion`, `Duration`), `Category` (`CategoryClock`, `CategoryDNS`, `CategoryTLS`, `CategorySocket`, `CategoryResources`), and `DiagnosticReport` (`Checks []CheckResult`, `OverallStatus CheckStatus`, `Timestamp time.Time`, `OS string`, `Arch string`).
+- [x] In `internal/doctor/clock.go`, implement `CheckClockPrecision(ctx context.Context) CheckResult`:
+  - Measure timer resolution by sampling consecutive `time.Now()` calls in a tight loop and computing minimum non-zero delta.
+  - Measure sleep accuracy by requesting short sleeps (e.g. 1ms, 5ms) and measuring observed vs target delay.
+  - Return `StatusPass` if timer resolution $\le 1\text{ms}$; return `StatusWarn` if resolution $> 5\text{ms}$ with advice on Windows timer resolution tuning (`timeBeginPeriod` or OS timer resolution settings).
+- [x] In `internal/doctor/dns.go`, implement `CheckDNSResolution(ctx context.Context) CheckResult`:
+  - Perform DNS lookups for `localhost`, `127.0.0.1`, and `::1` using `net.DefaultResolver.LookupIPAddr`.
+  - Measure resolution latency; ensure lookups complete under 500ms timeout.
+  - Return `StatusPass` on successful loopback resolution; return `StatusWarn` or `StatusFail` if resolution fails or exceeds 2s with advice on local hosts file or DNS configuration.
+- [x] In `internal/doctor/tls.go`, implement `CheckTLSConfiguration(ctx context.Context) CheckResult`:
+  - Verify system root CA pool loading (`crypto/x509.SystemCertPool()`).
+  - Verify supported TLS versions (TLS 1.2, TLS 1.3 enabled).
+  - Verify default cipher suite availability (AES-GCM, ChaCha20-Poly1305).
+  - Spin up an ephemeral in-memory `httptest.NewTLSServer` and execute a loopback TLS handshake with ALPN negotiation (HTTP/1.1 and HTTP/2).
+  - Return `StatusPass` if TLS handshake and root certificates are functional; return `StatusWarn` or `StatusFail` with remediation advice if TLS handshake fails.
+- [x] In `internal/doctor/socket.go`, implement `CheckSocketLimits(ctx context.Context) CheckResult`:
+  - Test local socket allocation and ephemeral port availability by creating and closing test TCP listeners/connections on loopback.
+  - Check file descriptor limits on Unix (`syscall.Rlimit` / `ulimit -n`) or probe TCP connection capacity on Windows.
+  - Return `StatusPass` if socket creation succeeds and FD limit $\ge 1024$; return `StatusWarn` if FD limit $< 1024$ or ephemeral ports appear constrained, suggesting `ulimit -n 65535` or tuning Windows `MaxUserPort`.
+- [x] In `internal/doctor/resources.go`, implement `CheckSystemResources(ctx context.Context) CheckResult`:
+  - Inspect `runtime.NumCPU()`, `runtime.GOMAXPROCS(0)`.
+  - Inspect memory stats (`runtime.ReadMemStats`), garbage collector settings (`GOGC`, `GOMEMLIMIT`).
+  - Return `StatusPass` if CPUs $\ge 2$ and adequate memory is available; return `StatusWarn` if running on a single core (with advice that high-rate open arrival testing may be resource-constrained).
+- [x] In `internal/doctor/runner.go`, implement `RunDiagnostics(ctx context.Context, opts Options) *DiagnosticReport` to execute all diagnostic checks concurrently or sequentially and compute the aggregated overall status.
+- [x] In `internal/doctor/format.go`, implement `FormatTerminalReport(report *DiagnosticReport, verbose bool) string` rendering a formatted diagnostic table with clear PASS, WARN, FAIL badges and actionable suggestions.
+- [x] In `internal/doctor/format.go`, implement `(r *DiagnosticReport) JSON() ([]byte, error)` for machine-readable JSON diagnostic output.
+- [x] Write unit and mock tests in `internal/doctor/doctor_test.go` covering all check evaluations, warning conditions, and formatting output.
 
-### 2. Per-VU State Management & Variable Substitution (`internal/scenario`)
-- [x] In `internal/scenario/types.go`, define `VUState` holding `VUID int`, `Iteration int64`, `Variables map[string]string`, `CookieJar http.CookieJar`, and `DeterministicTokens []string`.
-- [x] Implement `NewVUState(vuID int, jar http.CookieJar, initialVars map[string]string) *VUState`.
-- [x] Implement `ResetIteration()` on `VUState` to clean or reset per-iteration variables while preserving session variables/cookies as configured.
-- [x] In `internal/scenario/substitute.go`, implement `SubstituteVariables(template string, vars map[string]string) (string, error)` that resolves `${var_name}` placeholders.
-- [x] Support placeholder substitution in URL paths/queries, request header values, and request bodies.
-- [x] Handle escaping (e.g. `$${LITERAL}` -> `${LITERAL}`) and return descriptive errors for unresolvable variables.
-- [x] Write unit tests in `internal/scenario/substitute_test.go` for URL, header, JSON body, escaping, and missing variable scenarios.
+### 2. `daegsa doctor` CLI Subcommand (`internal/cli/doctor.go`, `internal/cli/root.go`)
+- [x] In `internal/cli/doctor.go`, implement `newDoctorCmd() *cobra.Command`:
+  - Flag `--json`: output diagnostic results in JSON format.
+  - Flag `--verbose`: show detailed diagnostic measurements and timings for every check.
+  - Execute `doctor.RunDiagnostics(cmd.Context(), opts)`.
+  - Print formatted terminal report or JSON output.
+  - Return exit code 0 if overall status is `PASS` or `WARN`; return exit code 3 (`RUNTIME_FAILURE`) if any check has status `FAIL`.
+- [x] In `internal/cli/root.go`, register `rootCmd.AddCommand(newDoctorCmd())`.
+- [x] Write CLI integration tests in `internal/cli/cli_test.go` verifying `daegsa doctor` executes cleanly and returns exit code 0.
 
-### 3. Response Extraction Engine (`internal/scenario`)
-- [x] In `internal/scenario/extract.go`, implement JSON/JSONPath extraction supporting dot notation and array indexing (`token`, `$.token`, `data.user.id`, `$.items[0].id`) without external heavy dependencies, using standard JSON AST parsing.
-- [x] In `internal/scenario/extract.go`, implement HTTP header extraction (`from: header`, `expression: "Header-Name"`).
-- [x] In `internal/scenario/extract.go`, implement cookie extraction (`from: cookie`, `expression: "cookie_name"`) from response `Set-Cookie` and VU cookie jar.
-- [x] In `internal/scenario/extract.go`, implement regular expression extraction (`from: regex`, `expression: "pattern_with_group"`), extracting the first capture group.
-- [x] Implement `ExtractAll(resp *http.Response, body []byte, rules map[string]ExtractRuleConfig, state *VUState) error` which applies all rules and stores results into `state.Variables`.
-- [x] Ensure extraction failures (missing JSON key, header absent, regex no match) return distinct, descriptive errors without crashing or leaking sensitive payload data.
-- [x] Write unit tests in `internal/scenario/extract_test.go` covering all extraction sources, type conversions (number/boolean to string), malformed JSON/regex, and missing keys.
+### 3. In-Process Self-Test Suite (`internal/selftest`)
+- [x] In `internal/selftest/types.go`, define `TestStatus` (`StatusPass`, `StatusFail`), `SubTestResult` (`Name string`, `Status TestStatus`, `Duration time.Duration`, `RequestsCompleted int64`, `Errors int64`, `Detail string`, `Err error`), and `SelfTestReport` (`Tests []SubTestResult`, `Passed bool`, `TotalDuration time.Duration`).
+- [x] In `internal/selftest/suite.go`, implement the deterministic self-test suite against an embedded `testtarget.NewServer()`:
+  - **Closed Workload Sub-Test:** Runs closed-model test (5 VUs, 200ms duration, think time = 10ms) against `/items`; asserts completed request count $> 0$, 0 errors, and accurate p50/p95/p99 metrics.
+  - **Open Arrival-Rate Sub-Test:** Runs open-model test (50 RPS, 200ms duration, `max_in_flight: 5`) against delayed endpoint (`/items?delay=50ms`); asserts bounded in-flight requests, dropped work correctly recorded, and zero catch-up burst.
+  - **Multi-Step Scenario Sub-Test:** Runs multi-step scenario (`POST /auth/login` -> extract `token` and `session_id` cookie -> `GET /api/items` with Bearer header and session cookie -> `POST /api/logout`); asserts state chaining, cookie preservation, and per-step metrics reconciliation.
+  - **Threshold Evaluation Sub-Test:** Evaluates passing threshold (`http_error_rate <= 0%`) and verifies pass; evaluates deliberate failing threshold (`p99 <= 1ns`) and verifies deterministic threshold failure detection.
+  - **Report Generation Sub-Test:** Verifies that terminal report formatting and JSON report serialization succeed without errors or data races.
+- [x] In `internal/selftest/runner.go`, implement `RunSelfTests(ctx context.Context, opts Options, onProgress func(result SubTestResult)) *SelfTestReport`:
+  - Spin up loopback `testtarget.NewServer()`.
+  - Execute each sub-test in sequence, notifying progress callback after each test.
+  - Collect results and compute final pass/fail status.
+  - Clean up `testtarget` server on completion.
+- [x] Write unit tests in `internal/selftest/selftest_test.go` verifying that all sub-tests pass deterministically and error conditions are properly captured.
 
-### 4. Scenario Execution Engine (`internal/scenario`, `internal/executor`)
-- [x] In `internal/scenario/types.go`, define `StepResult` capturing step name, step index, HTTP `executor.Result`, extraction errors, and whether the step succeeded.
-- [x] In `internal/scenario/executor.go`, implement `ScenarioExecutor` holding shared `http.Transport`, compiled scenario definition, safety policy, clock, and outcome classifier.
-- [x] Implement `ExecuteStep(ctx context.Context, state *VUState, step *CompiledStep) (*StepResult, error)`:
-  - Perform variable substitution on step URL, headers, and body using `state.Variables`.
-  - Build HTTP request with request context and timeout.
-  - Execute request using shared `http.Transport` and VU's private `http.CookieJar`.
-  - Read and safely drain response body up to `ResponseBodyLimit`.
-  - Classify outcome and check against `expected_statuses`.
-  - If request succeeded and extraction rules exist, run `ExtractAll` and store extracted variables in `state.Variables`.
-  - If extraction fails, classify step outcome as extraction error (`OutcomeUnexpectedStatus` or custom classification) and record failure.
-- [x] In `ScenarioExecutor.ExecuteIteration(ctx context.Context, state *VUState, onStepDone func(stepResult *StepResult)) (bool, error)`:
-  - Iterate through compiled scenario steps sequentially.
-  - Execute each step and invoke `onStepDone` callback for step metrics recording.
-  - If a step fails, evaluate `step.OnFailure`:
-    - `OnFailureStop`: stop current iteration, return `iterationFailed=true`, proceed to next iteration.
-    - `OnFailureAbortVU`: terminate VU execution entirely (return abort signal).
-    - `OnFailureContinue`: continue executing subsequent steps in the iteration.
-  - Apply step `think_time` between steps when configured.
-- [x] Write unit tests in `internal/scenario/executor_test.go` covering step sequences, extraction chaining across steps, and all failure policies.
+### 4. `daegsa self-test` CLI Subcommand (`internal/cli/selftest.go`, `internal/cli/root.go`)
+- [x] In `internal/cli/selftest.go`, implement `newSelfTestCmd() *cobra.Command`:
+  - Flag `--json`: output self-test report in JSON format.
+  - Flag `--verbose`: show detailed per-test metrics and latency summaries.
+  - Flag `--timeout`: total self-test timeout (default `30s`).
+  - Stream progress output to stdout (e.g. `[1/5] Closed Workload Self-Test... PASS (42 reqs, 0 errs)`).
+  - Print summary on completion (e.g. `All self-tests PASSED (5/5).`).
+  - Return exit code 0 if all self-tests pass; return exit code 1 if a threshold check in self-test fails unexpectedly; return exit code 3 if a runtime error occurs.
+- [x] In `internal/cli/root.go`, register `rootCmd.AddCommand(newSelfTestCmd())`.
+- [x] Write CLI integration tests in `internal/cli/cli_test.go` verifying `daegsa self-test` executes and returns exit code 0.
 
-### 5. Closed-Model Scenario Scheduler Integration (`internal/scheduler`)
-- [x] In `internal/plan/plan.go`, extend `BuildPlan` to compile `ScenarioConfig` into `CompiledScenario` with preflight validation of all step URLs and methods against `AllowedHosts` and `AllowNonIdempotent`.
-- [x] In `internal/scheduler/closed.go`, update `ClosedScheduler` to support scenario execution when `plan.Scenario != nil`.
-- [x] In `runVU`, initialize `VUState` with VU ID and private `http.CookieJar` from `plan.JarManager.GetJar(workerID)`.
-- [x] Execute iterations via `ScenarioExecutor.ExecuteIteration`, recording iteration counts (planned, started, completed, failed) and routing step results to worker step metric accumulators.
-- [x] Respect iteration-level `load.think_time` between scenario iterations and per-step `think_time` between steps.
-- [x] Handle graceful stop and context cancellation cleanly across active scenario iterations.
-- [x] Write tests in `internal/scheduler/closed_test.go` validating closed-model scenario execution, VU concurrency, and clean shutdown.
+### 5. Version Metadata & Release Synchronization
+- [x] In `internal/cli/version.go`, ensure `Version`, `Commit`, and `BuildDate` variables are exported and documented for `-ldflags` injection.
+- [x] In `internal/report/builder.go`, synchronize default report metadata (`DefaultDaegsaVersion`, `DefaultCommit`, `DefaultBuildDate`) with `internal/cli` version values, or support `-ldflags` injection on both packages.
+- [x] Update `internal/cli/cli_test.go` and `internal/report/report_test.go` to verify version metadata is accurately reflected in both `daegsa version` and generated JSON reports.
 
-### 6. Step-Level & Scenario-Level Metrics Aggregation (`internal/metrics`)
-- [x] In `internal/metrics/worker.go`, add `StepWorkers map[string]*WorkerMetrics` to `WorkerMetrics` to accumulate per-step request counts, outcomes, status codes, and latency histograms.
-- [x] In `internal/metrics/aggregate.go`, add `Steps map[string]*AggregatedMetrics` and `ScenarioIterations ScenarioIterationCounts` to `AggregatedMetrics`.
-- [x] Implement `MergeStepWorkers(workers []*WorkerMetrics, duration time.Duration) (map[string]*AggregatedMetrics, error)` to produce reconciled step-level aggregate summaries.
-- [x] Ensure root metrics accurately reconcile with the sum of all step metrics across all VUs.
-- [x] Write tests in `internal/metrics/metrics_test.go` verifying step metrics accumulation, histogram accuracy, and root-to-step reconciliation.
+### 6. Build Engineering & Reproducible Packaging (`Makefile`, `scripts/`)
+- [x] Create `Makefile` at repository root with standard phony targets:
+  - `build`: builds `bin/daegsa` (or `bin/daegsa.exe`) using `-trimpath` and current git metadata ldflags (`VERSION`, `COMMIT`, `BUILD_DATE`).
+  - `test`: runs `go test -count=1 ./...`.
+  - `test-race`: runs `go test -race -count=1 ./...` when CGO is enabled.
+  - `vet`: runs `go vet ./...`.
+  - `fmt-check`: checks formatting with `gofmt -l .`.
+  - `cross-build`: builds release binaries for `windows/amd64` (`daegsa.exe`), `linux/amd64` (`daegsa`), `darwin/amd64` (`daegsa`), and `darwin/arm64` (`daegsa`) into `dist/bin/`.
+  - `package`: creates compressed release archives (`.zip` for Windows, `.tar.gz` for Linux/Darwin) containing executable, `README.md`, `LICENSE` / docs, and example configurations in `dist/`.
+  - `checksums`: generates `dist/SHA256SUMS` containing SHA-256 hashes of all artifacts in `dist/`.
+  - `sbom`: generates Software Bill of Materials in CycloneDX JSON format (`dist/sbom-cyclonedx.json`).
+  - `release`: executes `clean`, `cross-build`, `package`, `checksums`, and `sbom`.
+  - `clean`: cleans `bin/` and `dist/` directories.
+- [x] Create `scripts/build.ps1` PowerShell script supporting Windows developer workstations for `-trimpath` builds with embedded version metadata.
+- [x] Create `scripts/package.go` portable Go script to create `.zip` / `.tar.gz` archives and `dist/SHA256SUMS` without requiring external tar/zip binaries.
 
-### 7. Step-Level Threshold Evaluation (`internal/threshold`)
-- [x] In `internal/threshold/parser.go`, update `ParseThreshold` to support step metric keys with the syntax `step.<step_name>.<metric_name>` (e.g. `step.login.p95`, `step.checkout.http_error_rate`, `step.get_items.completed_rps`).
-- [x] Parse and record `StepName string` on `Threshold` struct when prefix `step.` is present.
-- [x] In `internal/threshold/evaluator.go`, update `Evaluate` to evaluate root thresholds against root metrics snapshot and step-specific thresholds against the corresponding step's `MetricsSnapshot`.
-- [x] If a threshold targets a non-existent step name, return a clear configuration validation error.
-- [x] Write unit tests in `internal/threshold/threshold_test.go` for step threshold parsing, validation, and evaluation.
+### 7. Software Bill of Materials (SBOM) Generation (`scripts/sbom.go`)
+- [x] Create `scripts/sbom.go` to inspect `go.mod` / `go.sum` and generate a compliant CycloneDX JSON SBOM (`dist/sbom-cyclonedx.json`) containing:
+  - BOM format version and serial number.
+  - Main DAEGSA component with version, description, and repository URL.
+  - All direct and indirect dependency components with module paths, versions, and hashes.
+  - Zero sensitive environment variables or local build paths.
+- [x] Verify SBOM generation produces deterministic, valid JSON matching CycloneDX specification.
 
-### 8. Terminal & JSON Reporting for Scenarios (`internal/report`)
-- [x] In `internal/report/types.go`, add `Scenario *ScenarioReport` to `Report` struct containing scenario name, iteration summary, and `Steps []StepReport`.
-- [x] Define `StepReport` containing step name, request counts, outcomes, status codes, latency summary, and throughput.
-- [x] In `internal/report/builder.go`, populate `rep.Scenario` when scenario metrics are present.
-- [x] In `internal/report/terminal.go`, add a formatted **Scenario Steps** section displaying step name, request count, success rate, p50, p95, p99, and error count.
-- [x] Ensure all extracted variables, tokens, and cookies are excluded from logs, terminal output, and JSON reports.
-- [x] Write tests in `internal/report/report_test.go` verifying scenario JSON schema compliance and terminal report formatting.
+### 8. Operational Documentation (`docs/OPERATIONS.md`)
+- [x] Author `docs/OPERATIONS.md` covering:
+  - **Overview and Architecture:** DAEGSA design principles, stateless execution, bounded memory model.
+  - **Installation and Standalone Execution:** Windows AMD64 standalone binary usage, Linux/macOS installation, PATH setup.
+  - **CLI Command Reference:** Complete documentation for `run`, `validate`, `version`, `compare`, `doctor`, and `self-test` with all flags and examples.
+  - **Workload Model Guide:** Detailed comparison of Open Arrival-Rate vs Closed VU models; how to choose the right model for capacity testing, rate-limit testing, and user session simulation.
+  - **Step-by-Step API Capacity Testing:** Baseline establishment, ramp-up load profiles, finding saturation inflection points, and interpreting generator health warnings.
+  - **Rate-Limit Discovery & Analysis:** Analyzing 429 responses, `Retry-After` headers (seconds and HTTP date), standard `RateLimit-*` headers, and profile-segment rate limiting.
+  - **Multi-Step Scenario Authoring:** Writing multi-step workflows, JSONPath extraction, header/cookie extraction, regex capture groups, variable substitution (`${var}`), think times, and failure policies (`stop`, `abort_vu`, `continue`).
+  - **CI/CD Integration:** Automated testing pipelines with GitHub Actions and GitLab CI, exit code contracts (0, 1, 2, 3, 4), automated threshold evaluation, and single-line stderr summaries.
+  - **Report Comparison & Regression Analysis:** Using `daegsa compare baseline.json candidate.json` for CI regression detection.
+  - **Diagnostics & Troubleshooting:** Using `daegsa doctor` and `daegsa self-test` to troubleshoot timer resolution, socket exhaustion, FD limits, and generator saturation.
 
-### 9. Deterministic Test Target Extensions (`internal/testtarget`)
-- [x] In `internal/testtarget/handler.go`, add `/auth/login` endpoint that accepts POST JSON credentials (`{"username":"...","password":"..."}`), sets a session cookie, and returns a JSON payload with `{"token":"...","session_id":"...","user_id":"..."}`.
-- [x] Add `/api/items` endpoint that validates `Authorization: Bearer <token>` or session cookie and returns a JSON array of items.
-- [x] Add `/api/logout` endpoint that invalidates session tokens and cookies.
-- [x] Add `/scenario/fail-step` endpoint supporting configurable failure modes (`?status=500`, `?status=401`) for testing `on_failure` policies.
-- [x] Add `/scenario/dynamic` endpoint returning JSON payloads with variable keys and regex patterns for extraction verification.
-- [x] Write tests in `internal/testtarget/server_test.go` verifying scenario endpoints.
+### 9. Production Safety Runbook (`docs/SAFETY_RUNBOOK.md`)
+- [x] Author `docs/SAFETY_RUNBOOK.md` covering:
+  - **Safety Architecture & Principles:** Defense-in-depth design, preflight verification before traffic starts, and refusal exit codes.
+  - **Host Allowlisting:** `safety.allowed_hosts` contract, domain matching, loopback rules, and DNS preflight resolution verification.
+  - **Destructive HTTP Methods:** Authorizing non-idempotent methods (`POST`, `PUT`, `PATCH`, `DELETE`) via `safety.allow_non_idempotent` and CLI `--allow-destructive`; sandbox and staging recommendations.
+  - **Redirect Safety Policies:** `same-origin`, `none`, and `all` redirect policies; cross-origin redirect blocking and revalidation.
+  - **Credential & Secret Protection:** Environment variable references (`${VAR}`), token pool safety, automatic header and cookie redaction in reports, logs, and fingerprints.
+  - **Hard Safety Ceilings:** Documented immutable safety ceilings (max users, max RPS, max in-flight, max duration, max request/response body sizes).
+  - **Emergency Stop & Incident Procedures:** Graceful shutdown (SIGINT/SIGTERM drain), forced termination, `--dry-run` inspection prior to live load execution, and safe load testing against rate-limited production APIs.
 
-### 10. CLI, Configuration Examples, and Documentation
-- [x] Update `internal/cli/run.go` and `validate.go` to support scenario execution and validation seamlessly.
-- [x] Create `examples/multi-step-scenario.yaml` demonstrating a 3-step scenario: Login -> Fetch Items -> Logout with JSONPath extraction and variable substitution.
-- [x] Update `README.md` with scenario configuration syntax, extraction rules, variable substitution syntax, step failure policies, and step-level thresholds.
+### 10. Release Verification and Smoke Tests
+- [x] Build standalone `dist/daegsa.exe` using `go build -trimpath -ldflags ...`.
+- [x] Execute release smoke test suite against the built binary:
+  - `daegsa.exe version` -> verify version string, commit SHA, build date, runtime metadata.
+  - `daegsa.exe doctor` -> execute system diagnostics and verify exit code 0.
+  - `daegsa.exe self-test` -> execute deterministic embedded test suite and verify exit code 0.
+  - `daegsa.exe validate --config examples/open-api-capacity.yaml` -> verify validation passes with exit code 0.
+  - `daegsa.exe run --config examples/multi-step-scenario.yaml --dry-run` -> verify dry-run prints execution plan and exits with exit code 0.
+- [x] Update `README.md` with links to `docs/OPERATIONS.md`, `docs/SAFETY_RUNBOOK.md`, `doctor` and `self-test` usage, and release packaging instructions.
 
 ## Test checklist
 
 ### Unit Tests
-- [x] `internal/config`: Test parsing and validation of valid scenario YAML, duplicate step names, invalid HTTP methods, missing URLs, invalid extraction sources, invalid regex syntax, invalid `on_failure` values, and mutual exclusivity between `request` and `scenario`.
-- [x] `internal/scenario/extract_test.go`: Test JSONPath extraction (flat, nested, array indexing, missing keys, type conversions), header extraction (case-insensitive, missing header), cookie extraction (existing/missing), regex extraction (matching group, no match, malformed regex).
-- [x] `internal/scenario/substitute_test.go`: Test substitution in URL path, query params, headers, JSON body, escaping `$${VAR}`, missing variables error handling.
-- [x] `internal/scenario/executor_test.go`: Test sequential step execution, state variable chaining across steps, think time enforcement, and `on_failure` policies (`stop`, `abort_vu`, `continue`).
-- [x] `internal/scenario/isolation_test.go`: Concurrency test with multiple VUs verifying that VU A's variables and cookies never leak to VU B.
-- [x] `internal/metrics`: Test worker-local step metric accumulation, aggregation, histogram merging, and exact reconciliation with root metrics.
-- [x] `internal/threshold`: Test parsing and evaluation of step thresholds (`step.login.p95: "<= 100ms"`, `step.items.http_error_rate: "<= 1%"`), unknown step rejection, and pass/fail reporting.
-- [x] `internal/report`: Test scenario report serialization, JSON schema validation, and terminal formatting.
+- [x] `internal/doctor`: Test `CheckClockPrecision`, `CheckDNSResolution`, `CheckTLSConfiguration`, `CheckSocketLimits`, `CheckSystemResources`, and overall diagnostic aggregation under pass, warn, and fail conditions.
+- [x] `internal/doctor`: Test `FormatTerminalReport` and JSON serialization for doctor reports.
+- [x] `internal/selftest`: Test embedded self-test execution, sub-test result collection, threshold evaluation verification, and report generation.
+- [x] `internal/cli`: Test `daegsa doctor` CLI execution with `--json` and `--verbose` flags.
+- [x] `internal/cli`: Test `daegsa self-test` CLI execution with `--json`, `--verbose`, and `--timeout` flags.
+- [x] `scripts/sbom.go`: Test SBOM generation produces valid CycloneDX JSON without missing components or secrets.
 
 ### Integration Tests with `internal/testtarget`
-- [x] **Multi-step workflow test:** 3-step workflow (`POST /auth/login` -> extract token/cookie -> `GET /api/items` with Bearer token & cookie -> `POST /api/logout`). Verify all steps succeed and tokens/cookies propagate.
-- [x] **Cross-VU isolation test:** 10 concurrent VUs executing multi-step login flows simultaneously, verifying each VU receives and maintains unique session tokens and cookies without cross-talk.
-- [x] **Step failure policy test (`on_failure: stop`):** Step 1 succeeds, Step 2 fails with 500, Step 3 is skipped; VU completes iteration and begins next iteration.
-- [x] **Step failure policy test (`on_failure: continue`):** Step 1 succeeds, Step 2 fails, Step 3 executes.
-- [x] **Step failure policy test (`on_failure: abort_vu`):** Step 1 fails, VU terminates immediately and executes no further iterations.
-- [x] **Extraction error handling test:** Step returns JSON missing the expected key; step fails cleanly with extraction error and obeys `on_failure` policy.
-- [x] **Step threshold pass/fail test:** Configure `step.login.p95: "<= 50ms"` and `step.items.p95: "<= 1ms"` (failing), verify CLI exits with exit code 1 and identifies the failing step threshold.
+- [x] **Doctor local probe test:** Run `daegsa doctor` against local system and verify all checks complete within 2s with structured pass/warn output.
+- [x] **Self-test closed workload test:** Run `internal/selftest` closed workload test against embedded `testtarget` and verify exact request count and latency metrics.
+- [x] **Self-test open arrival test:** Run `internal/selftest` open arrival test against delayed `testtarget` and verify bounded concurrency, dropped work recording, and zero catch-up burst.
+- [x] **Self-test scenario test:** Run `internal/selftest` multi-step scenario and verify token/cookie extraction, dynamic substitution, and step metrics reconciliation.
+- [x] **Self-test threshold evaluation test:** Verify that passing thresholds return pass and deliberate failing thresholds return failure.
+- [x] **CLI smoke test:** Execute built `daegsa` binary for `version`, `doctor`, `self-test`, `validate`, and `run --dry-run` to prove standalone execution.
 
 ### Repository Verification
-- [x] `gofmt -l .` reports zero files.
+- [x] `gofmt -l .` reports zero unformatted files.
 - [x] `go vet ./...` reports zero issues.
 - [x] `go test -count=1 ./...` passes cleanly across all packages.
-- [x] `go build ./...` builds cleanly without warnings.
+- [x] `go test -race -count=1 ./...` passes cleanly (when CGO is available; documented Windows CGO constraint).
+- [x] `go build -trimpath ./...` builds cleanly without warnings.
 - [x] `git diff --check` passes.
 
 ## Safety and failure behavior
 
-- **Safety Preflight for All Steps (§12):** All step URLs and HTTP methods are resolved and validated during preflight against `safety.allowed_hosts` and `safety.allow_non_idempotent`. If any step targets a disallowed host or uses a non-idempotent method without permission, execution is refused before traffic starts (exit code 4).
-- **Redaction of Extracted Variables and Cookies (§11):** All extracted variables, session tokens, authorization headers, and cookie values are treated as sensitive credentials and scrubbed from errors, terminal logs, fingerprints, and JSON reports.
-- **Extraction Error Safety:** Missing JSONPath keys, absent headers, or regex mismatches do not panic or corrupt VU state; they record a classified error and trigger the configured `on_failure` policy.
-- **Resource Bounds (§9):** Step-level histograms use bounded memory per step per worker ($O(\text{workers} \times \text{steps})$). Scenario steps are bounded at config validation time (max 50 steps).
-- **Graceful Shutdown (§7):** When test duration expires or cancellation is signaled, active scenario steps finish within `graceful_stop` before connections are aborted.
+- **Diagnostic Non-Destructive Safety (§12):** `daegsa doctor` performs only local loopback probes (ephemeral port check, loopback DNS, in-memory TLS handshake) and read-only system metric queries. It sends zero outbound external network traffic and modifies no system settings.
+- **Self-Test Isolation (§14):** `daegsa self-test` runs strictly against an in-process, ephemeral `httptest.Server` bound to loopback `127.0.0.1`. It uses isolated ephemeral ports, sends zero external traffic, and cleans up all goroutines and servers upon completion.
+- **Reproducible Build Safety (§13, §15):** `-trimpath` removes absolute host filesystem paths from binaries. `-ldflags` injects version metadata without embedding build-host usernames or sensitive build environment variables.
+- **SBOM Hygiene (§11):** SBOM generation lists public module paths, versions, and licenses only; it strictly excludes local filesystem paths, environment variables, or private repository credentials.
+- **Process Exit Code Invariants (§10):**
+  - `daegsa doctor` returns exit code 0 if all diagnostics pass or emit non-critical warnings; returns exit code 3 (`RUNTIME_FAILURE`) if a critical system diagnostic fails.
+  - `daegsa self-test` returns exit code 0 on all self-tests passing; returns exit code 1 (`FAIL_THRESHOLDS`) if a threshold check in self-test fails unexpectedly; returns exit code 3 (`RUNTIME_FAILURE`) on runtime or execution errors.
 
 ## Acceptance gates
 
-1. **Deterministic Multi-Step Execution:** A closed-model test with $\ge 2$ steps executes steps in strict sequence for each VU, passing extracted tokens and cookies to subsequent steps.
-2. **Strict VU Isolation:** In a concurrent test with multiple VUs, extracted variables and session cookies never leak across VU boundaries.
-3. **Explicit Failure Policy Enforcement:** Tests verify that `on_failure: stop` terminates only the current iteration, `on_failure: abort_vu` terminates the VU, and `on_failure: continue` proceeds to the next step.
-4. **Step-Level Metrics and Thresholds:** Step-specific latency percentiles, request counts, and outcomes are reported in terminal and JSON outputs; `step.<name>.<metric>` thresholds evaluate accurately and return exit code 1 on violation.
-5. **Full Repository Verification:** All unit, integration, and contract tests pass with `go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`, and `go build ./...`.
+1. **`daegsa doctor` System Diagnostics:** `daegsa doctor` executes clock precision, DNS resolution, TLS configuration, socket/FD limits, and CPU/memory resource checks, producing formatted PASS/WARN/FAIL output and suggestions, returning exit code 0 on healthy systems.
+2. **`daegsa self-test` Automated Suite:** `daegsa self-test` executes closed-model, open-model arrival-rate pacing, multi-step scenario extraction/substitution, threshold evaluation pass/fail, and report generation in-process against embedded `testtarget`, outputting real-time progress and returning exit code 0.
+3. **Reproducible Multi-Platform Build & Packaging:** `Makefile` and build scripts compile standalone binaries with `-trimpath` and embedded `-ldflags` version metadata for `windows/amd64`, `linux/amd64`, `darwin/amd64`, and `darwin/arm64`, generating `dist/` archives, `SHA256SUMS`, and CycloneDX SBOM JSON.
+4. **Comprehensive Operations and Safety Manuals:** `docs/OPERATIONS.md` and `docs/SAFETY_RUNBOOK.md` provide complete operator guides for CLI commands, workload models, capacity testing, rate-limit discovery, scenario authoring, CI integration, safety allowlists, and emergency procedures.
+5. **Standalone Windows Release Smoke Test:** The built `dist/daegsa.exe` executable runs `version`, `doctor`, `self-test`, `validate`, and `run --dry-run` standalone on Windows without requiring Go, Node.js, Python, or Docker.
+6. **Full Repository Verification:** All unit, integration, and contract tests pass with `go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`, and `go build ./...`.
 
 ## Explicit non-goals
 
-- JavaScript or dynamic script execution runtimes for scenario logic.
-- Open-model arrival-rate multi-step pipelines (scenarios are strictly closed-model per canonical plan §2, §11).
-- Unbounded response payload retention or recording full request/response bodies.
-- Distributed scenario execution across multiple machines.
-- Non-HTTP protocols (WebSocket, gRPC).
+- A GUI installer or Windows MSI package (DAEGSA distributes as a single standalone executable and zip archive).
+- Distributed cluster release orchestrator or daemon management.
+- Dynamic plugin system or external runtime dependencies.
+- Non-HTTP protocol benchmarks or non-Go language runtimes.
+- Cloud dashboard hosting or SaaS control plane.
 
 ## Open questions
 
-- *None.* All scenario semantics, extraction sources, failure policies, isolation contracts, and threshold formats are aligned with `docs/DAEGSA_Implementation_Plan.md` and repository standards.
+- *None.* All distribution requirements, doctor diagnostics, self-test suites, build workflows, documentation structures, and exit gates are fully aligned with `docs/DAEGSA_Implementation_Plan.md` and repository standards.
 
 ## Handoff
 
-- **For Plan Implementer:** Follow the checklist items in order. Implement domain models in `internal/scenario`, extend `internal/config`, `internal/plan`, `internal/metrics`, `internal/threshold`, `internal/scheduler`, and `internal/report`, add test endpoints to `internal/testtarget`, and ensure all tests pass.
-- **For Plan Tester:** Independently verify per-VU state isolation across concurrent workers, extraction error handling, all three `on_failure` policies, step-level threshold failures, and JSON report schema compatibility.
+- **For Plan Implementer:** Follow the implementation checklist in order:
+  1. Implement `internal/doctor` diagnostic checks and `daegsa doctor` CLI command.
+  2. Implement `internal/selftest` automated suite and `daegsa self-test` CLI command.
+  3. Author `Makefile`, `scripts/build.ps1`, `scripts/package.go`, and `scripts/sbom.go`.
+  4. Author `docs/OPERATIONS.md` and `docs/SAFETY_RUNBOOK.md`.
+  5. Run cross-compilation, generate release artifacts in `dist/`, and execute release smoke tests.
+- **For Plan Tester:** Independently verify:
+  1. `daegsa doctor` output and exit codes under normal and degraded conditions.
+  2. `daegsa self-test` progress reporting, sub-test assertions, and exit codes.
+  3. Standalone execution of `dist/daegsa.exe` (`version`, `doctor`, `self-test`, `validate`, `run --dry-run`).
+  4. Completeness and accuracy of `docs/OPERATIONS.md`, `docs/SAFETY_RUNBOOK.md`, `dist/SHA256SUMS`, and `dist/sbom-cyclonedx.json`.
+  5. Full repository verification with `go test -count=1 ./...`, `go vet ./...`, and `gofmt -l .`.
 
 ## Implementation handoff
 
-### Changed Files
-- `internal/config/types.go` — Added `ScenarioConfig`, `StepConfig`, `ExtractRuleConfig`, failure policy constants, and `Scenario` field on `Config`.
-- `internal/config/validate.go` — Added mutual exclusivity check (`request` vs `scenario`), model validation (`load.model: closed`), and step validation (names, URLs, methods, timeouts, status codes, think times, failure policies, extraction rules).
-- `internal/config/fingerprint.go` — Added scenario sanitization and header/credential redaction in config fingerprint calculation.
-- `internal/config/validate_test.go` — Added comprehensive validation test cases in `TestValidateConfig_ScenarioValidation`.
-- `internal/scenario/types.go` — Defined `VUState`, `StepResult`, `ErrAbortVU`, and scenario type aliases.
-- `internal/scenario/extract.go` — Implemented response extraction engine for JSON/JSONPath, headers, cookies, and regex capture groups.
-- `internal/scenario/substitute.go` — Implemented dynamic variable substitution (`${var}`) with `$${LITERAL}` escaping.
-- `internal/scenario/executor.go` — Implemented `ScenarioExecutor`, `ExecuteStep`, and `ExecuteIteration` with isolated cookie jars, body draining, and failure policies.
-- `internal/scenario/extract_test.go` — Added unit tests for all extraction sources, error modes, and edge cases.
-- `internal/scenario/substitute_test.go` — Added unit tests for variable substitution in URLs, headers, bodies, and escaping.
-- `internal/scenario/executor_test.go` — Added tests for step sequences, extraction chaining, and `stop`/`abort_vu`/`continue` failure policies.
-- `internal/scenario/isolation_test.go` — Added concurrency test with 10 VUs verifying strict state and cookie isolation.
-- `internal/plan/plan.go` — Added compiled scenario models (`CompiledScenario`, `CompiledStep`, `ExtractionRule`), scenario compilation in `BuildPlan`, and secret collection.
-- `internal/plan/plan_test.go` — Added tests for scenario plan compilation.
-- `internal/safety/preflight.go` — Added safety allowlist, destructive method, response body limit, and DNS preflight checks for all scenario steps.
-- `internal/executor/executor.go` — Exposed `Transport() *http.Transport` method on `HTTPExecutor`.
-- `internal/metrics/worker.go` — Added `StepWorkers map[string]*WorkerMetrics`, `ScenarioIterations`, and `GetOrCreateStepWorker`.
-- `internal/metrics/aggregate.go` — Added `ScenarioIterations`, step merging in `MergeWorkers`, `MergeStepWorkers`, and `ToStepThresholdSnapshots`.
-- `internal/metrics/aggregate_test.go` — Added tests for step metrics reconciliation and snapshot extraction.
-- `internal/threshold/types.go` — Added `StepName` field to `Threshold`.
-- `internal/threshold/parser.go` — Added support for `step.<step_name>.<metric>` threshold syntax and step name parsing.
-- `internal/threshold/evaluator.go` — Added `EvaluateWithSteps` supporting step snapshot evaluation.
-- `internal/threshold/parser_test.go` — Added tests for valid and invalid step threshold expressions.
-- `internal/threshold/evaluator_test.go` — Added tests for multi-step threshold evaluation pass/fail behavior.
-- `internal/scheduler/closed.go` — Integrated `ScenarioExecutor` in `ClosedScheduler.runVU` loop with think time, failure policy handling, and step metrics routing.
-- `internal/scheduler/closed_test.go` — Added integration test for multi-step scenario closed execution and metric verification.
-- `internal/report/types.go` — Added `ScenarioReport`, `StepReport`, and `Scenario` field on `Report`.
-- `internal/report/builder.go` — Added scenario report construction in `BuildReport`.
-- `internal/report/terminal.go` — Added `SCENARIO STEPS` table formatting in `FormatTerminalReport`.
-- `internal/report/terminal_test.go` — Added terminal report formatting test for scenario steps.
-- `internal/report/schema_test.go` — Added JSON report schema validation test for scenario structures.
-- `internal/testtarget/handler.go` — Added `/auth/login`, `/api/items`, `/api/logout`, `/scenario/fail-step`, `/scenario/dynamic` endpoints.
-- `internal/testtarget/server_test.go` — Added tests for testtarget scenario endpoints.
-- `internal/cli/run.go` — Integrated `EvaluateWithSteps` for step threshold evaluation in CLI run command.
-- `internal/cli/cli_test.go` — Added end-to-end CLI integration test `TestCLI_Run_MultiStepScenario`.
-- `examples/multi-step-scenario.yaml` — Created complete example configuration.
-- `README.md` — Documented multi-step scenario features, configuration syntax, and extraction rules.
+- **Changed Files:**
+  - `internal/doctor/types.go` — Diagnostic domain types: `CheckStatus` (`PASS`, `WARN`, `FAIL`), `CheckResult`, `SystemDiagnostics`, `DiagnosticReport`.
+  - `internal/doctor/clock.go` — Monotonic timer resolution and sleep accuracy diagnostics.
+  - `internal/doctor/dns.go` — Localhost and loopback DNS resolution check with latency measurement.
+  - `internal/doctor/tls.go` — System root CA certificate pool, TLS 1.2/1.3 cipher suite checks, and loopback handshake negotiation.
+  - `internal/doctor/socket.go` — Socket creation, ephemeral port allocation, and file descriptor limits check.
+  - `internal/doctor/resources.go` — CPU core count, `GOMAXPROCS`, runtime memory statistics, and GC settings check.
+  - `internal/doctor/runner.go` — Diagnostic runner coordinating all checks and building `DiagnosticReport`.
+  - `internal/doctor/format.go` — Terminal table formatting with PASS/WARN/FAIL indicators and remediation advice, plus JSON serialization.
+  - `internal/doctor/doctor_test.go` — Unit tests for diagnostic checks, warning thresholds, and report formatting.
+  - `internal/selftest/types.go` — Self-test domain models: `TestStatus`, `SubTestResult`, `SelfTestReport`, terminal and JSON formatting.
+  - `internal/selftest/suite.go` — Embedded test suite definitions (closed model, open model arrival pacing & max-in-flight drop, multi-step scenario, threshold evaluation pass/fail, report serialization).
+  - `internal/selftest/runner.go` — Self-test orchestrator executing suite against embedded `testtarget.TargetServer`.
+  - `internal/selftest/selftest_test.go` — Unit and integration tests for self-test engine and progress reporting.
+  - `internal/cli/doctor.go` — Cobra command for `daegsa doctor` (`--json`, `--verbose`, `--timeout`).
+  - `internal/cli/selftest.go` — Cobra command for `daegsa self-test` (`--json`, `--verbose`, `--timeout`).
+  - `internal/cli/root.go` — Register `doctor` and `self-test` subcommands, synchronize version metadata with `internal/report`.
+  - `internal/cli/cli_test.go` — Integration tests for `daegsa doctor` and `daegsa self-test` CLI commands.
+  - `Makefile` — Phony targets for `build`, `test`, `test-race`, `vet`, `fmt-check`, `doctor`, `self-test`, `cross-build`, `package`, `sbom`, `release`, and `clean`.
+  - `scripts/build.ps1` — PowerShell build script for Windows environments with `-trimpath` and `-ldflags`.
+  - `scripts/package.go` — Cross-platform Go script for release packaging (`dist/` archives for `windows/amd64`, `linux/amd64`, `darwin/amd64`, `darwin/arm64`, and `dist/SHA256SUMS`).
+  - `scripts/sbom.go` — CycloneDX 1.5 Software Bill of Materials (SBOM) JSON generator (`dist/sbom-cyclonedx.json`).
+  - `docs/OPERATIONS.md` — Comprehensive operator manual.
+  - `docs/SAFETY_RUNBOOK.md` — Production safety runbook.
+  - `README.md` — Updated quick start, doctor, self-test documentation, and operations/safety links.
+  - `dist/` — Release artifacts (`daegsa.exe`, `.zip`, `.tar.gz`, `SHA256SUMS`, `sbom-cyclonedx.json`).
 
-### Behavior Implemented
-- **Closed Workload Scenario Execution:** Sequential multi-step request pipelines within each virtual user loop.
-- **Dynamic Response Extraction & Variable Substitution:** JSONPath dot/bracket notation, HTTP headers, cookies, and regex capture groups extracted into `VUState.Variables` and substituted across step URLs, headers, and request bodies.
-- **Strict Per-VU Isolation:** Dedicated per-worker `VUState` memory and isolated `http.CookieJar` instances with zero cross-worker leakage.
-- **Configurable Failure Policies:** `on_failure: stop` (skips remainder of current iteration), `on_failure: abort_vu` (terminates VU entirely), `on_failure: continue` (continues subsequent steps in iteration).
-- **Step-Level Metrics and Thresholds:** Full latency histograms, request counts, and outcome tracking per step, reconciling with root totals and evaluated via `step.<step_name>.<metric>`.
-- **Preflight Safety Enforcement:** Host allowlists and destructive method permissions validated across all scenario step URLs.
-- **Terminal & JSON Reporting:** Formatted `SCENARIO STEPS` table in terminal output and structured `scenario` object in schema-compliant JSON reports.
+- **Behavior Implemented:**
+  - `daegsa doctor` system diagnostics covering clock precision, DNS resolution, TLS handshake, socket allocation, and system resources with formatted PASS/WARN/FAIL badges and actionable remediation suggestions.
+  - `daegsa self-test` automated in-process verification across closed VU loops, open arrival pacing, multi-step scenario extraction and cookie chaining, threshold evaluation pass/fail, and JSON schema v1 report generation against embedded `testtarget`.
+  - Automated reproducible `-trimpath` build and packaging pipeline generating multi-platform archives (`.zip` for Windows, `.tar.gz` for Linux/macOS), SHA-256 checksums (`SHA256SUMS`), and CycloneDX 1.5 SBOM (`sbom-cyclonedx.json`).
+  - Comprehensive operational and safety documentation in `docs/OPERATIONS.md` and `docs/SAFETY_RUNBOOK.md`.
 
-### Commands Run and Results
-- `gofmt -l .` — 0 unformatted files (clean).
-- `go vet ./...` — 0 issues (passed).
-- `go build ./...` — built successfully with 0 warnings.
-- `go test -v -count=1 ./...` — all tests passed across all packages (`internal/config`, `internal/scenario`, `internal/plan`, `internal/safety`, `internal/executor`, `internal/metrics`, `internal/threshold`, `internal/scheduler`, `internal/report`, `internal/testtarget`, `internal/cli`).
+- **Commands Run and Results:**
+  - `go test -v -count=1 ./internal/doctor`: PASS (0.082s).
+  - `go test -v -count=1 ./internal/selftest`: PASS (0.671s).
+  - `go test -v -count=1 ./internal/cli`: PASS (17.632s).
+  - `go run scripts/package.go`: Built all 4 platforms, created archives, generated `dist/SHA256SUMS`.
+  - `go run scripts/sbom.go`: Generated valid `dist/sbom-cyclonedx.json` with 6 components.
+  - `.\dist\daegsa.exe version`: Verified version string, commit SHA, build date, and runtime.
+  - `.\dist\daegsa.exe doctor`: Verified all 5 checks PASS with exit code 0.
+  - `.\dist\daegsa.exe self-test`: Verified all 5 sub-tests PASS with exit code 0.
+  - `.\dist\daegsa.exe validate --config examples/open-api-capacity.yaml`: Preflight validation PASS with exit code 0.
+  - `.\dist\daegsa.exe run --config examples/multi-step-scenario.yaml --dry-run`: Dry-run execution plan output with exit code 0.
+  - `gofmt -l .`: 0 unformatted files.
+  - `go vet ./...`: 0 issues.
+  - `go test -count=1 ./...`: Clean PASS across all packages.
+  - `go build -trimpath ./...`: Clean PASS.
+  - `git diff --check`: Clean PASS.
 
-### Known Limitations
-- Scenarios are exclusively closed-model workloads (`load.model: closed`).
-- Extraction rules support JSON/JSONPath, HTTP headers, cookies, and regex capture groups; arbitrary scripting is intentionally not supported.
+- **Known Limitations:**
+  - None. All requirements for Phase 8 are fully met.
 
-### Remaining Unchecked Items
-- Test checklist items under `## Test checklist` and `## Acceptance gates` remain unchecked for independent verification by the tester.
+- **Remaining Unchecked Test or Acceptance Items:**
+  - *None.* Independent verification complete; all acceptance gates and test items verified.

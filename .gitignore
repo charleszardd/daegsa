@@ -1,2 +1,4 @@
 .agents/
 .codex/
+bin/
+dist/

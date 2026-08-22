@@ -2,28 +2,52 @@
 
 DAEGSA is a deterministic Go CLI for REST API load, capacity, stress, spike, soak, and rate-limit testing. It keeps open arrival-rate traffic distinct from closed virtual-user traffic and reports generator limitations instead of presenting them as server capacity.
 
-## Run
+## Quick Start
 
-```text
-daegsa run --config examples/open-api-capacity.yaml
-daegsa run --config examples/profile-rate-limit.yaml --output-json result.json
+```bash
+# Verify local host readiness and diagnostics
+daegsa doctor
+
+# Run automated in-process end-to-end self-tests
+daegsa self-test
+
+# Validate configuration and safety preflight
+daegsa validate --config examples/open-api-capacity.yaml
+
+# Execute load test with JSON report output
+daegsa run --config examples/open-api-capacity.yaml --output-json result.json
+
+# Compare baseline vs candidate reports for performance regressions
 daegsa compare baseline.json candidate.json
 ```
 
-Schema-v1 configuration remains supported for constant open and closed workloads. Schema v2 adds ordered open-model profile segments. A segment is either constant (`rate`) or a deterministic stepped ramp (`start_rate`, `end_rate`, and `steps`). Warm-up and cool-down traffic is retained in reports but excluded from thresholds and default pass/fail evaluation.
+## Documentation
 
-The report root reconciles all traffic. Schema-v2 reports also include compiled segments, per-segment metrics, a measured-only summary, bounded rate-limit header consistency observations, first-throttle context, and conservative generator calibration. “No throttling observed” is evidence only for the tested rates, not a guaranteed safe production limit.
+- **[Operator Manual (docs/OPERATIONS.md)](docs/OPERATIONS.md)** — Complete CLI reference, workload model guide, capacity testing workflows, CI/CD integration, and troubleshooting.
+- **[Production Safety Runbook (docs/SAFETY_RUNBOOK.md)](docs/SAFETY_RUNBOOK.md)** — Preflight allowlisting, destructive method authorization, redirect policies, secret redaction, and emergency procedures.
+- **[Architecture and Implementation Plan (docs/DAEGSA_Implementation_Plan.md)](docs/DAEGSA_Implementation_Plan.md)** — Workload semantics, metrics reconciliation, outcome taxonomy, and safety contracts.
 
-`compare` accepts complete v1 and v2 reports up to 10 MiB. It prints factual single-run deltas and comparability warnings; it does not claim statistical significance or invent regression thresholds.
+## Key Capabilities
 
-## Multi-Step Scenarios
+### 1. Workload Models & Arrival Pacing
+- **Open Arrival-Rate (`load.model: open`)**: True rate-driven arrival pacing immune to coordinated omission. Enforces `max_in_flight` bounds and tracks dropped work explicitly without runaway catch-up bursts.
+- **Closed VU Loops (`load.model: closed`)**: Deterministic concurrency with user think time pacing and isolated per-VU cookie jars.
+- **Profile Stepped Ramps**: Dynamic rate step profiles with warm-up/cool-down segment metrics.
 
-DAEGSA supports multi-step scenario workflows under the closed workload model (`load.model: closed`). Scenarios allow modeling realistic multi-step user workflows (such as login -> browse/query -> logout) with:
+### 2. Multi-Step Scenarios
+DAEGSA supports stateful multi-step workflow scenarios under closed workloads:
 - **Dynamic Variable Extraction & Substitution**: Extract tokens, IDs, and headers from JSON, JSONPath (`$.token`, `items[0].id`), response headers, cookies, or regex capture groups, and substitute them dynamically into subsequent step URLs, headers, and request bodies via `${var_name}` (escaped as `$${LITERAL}`).
 - **Strict Per-VU Isolation**: Each virtual user executes in its own isolated memory state and cookie jar.
 - **Configurable Failure Policies**: Per-step failure behavior (`on_failure: stop`, `on_failure: abort_vu`, or `on_failure: continue`).
 - **Step-Level Metrics & Thresholds**: Granular performance assertions per step (`step.<step_name>.<metric>` such as `step.login.p95: "<= 100ms"`).
 
-See [examples/multi-step-scenario.yaml](examples/multi-step-scenario.yaml) for a complete scenario configuration.
+See [examples/multi-step-scenario.yaml](examples/multi-step-scenario.yaml) for an example scenario.
 
-See [docs/DAEGSA_Implementation_Plan.md](docs/DAEGSA_Implementation_Plan.md) for workload semantics and safety contracts.
+### 3. Generator Self-Diagnostics & Automated Self-Tests
+- **`daegsa doctor`**: Diagnoses timer precision, loopback/local DNS, TLS cipher suites and root CA cert pool, socket/FD headroom, CPU cores, and memory allocation with PASS/WARN/FAIL indicators and actionable advice.
+- **`daegsa self-test`**: In-process end-to-end verification across closed-model loops, open arrival pacing, multi-step scenario state chaining, and threshold rule evaluation against an embedded HTTP target.
+
+### 4. Standalone Multi-Platform Distribution
+- Pure standalone binaries with `-trimpath` reproducible builds.
+- Pre-built packages for Windows AMD64, Linux AMD64, macOS AMD64/ARM64 in `dist/`.
+- Verifiable SHA-256 checksums (`dist/SHA256SUMS`) and CycloneDX SBOM (`dist/sbom-cyclonedx.json`).
