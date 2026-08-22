@@ -15,13 +15,20 @@ LDFLAGS := -s -w \
 	-X $(PKG_REPORT).DefaultCommit=$(COMMIT) \
 	-X $(PKG_REPORT).DefaultBuildDate=$(BUILD_DATE)
 
-.PHONY: all build test test-race vet fmt fmt-check doctor self-test cross-build package sbom release clean
+.PHONY: all build build-gui gui test test-race vet fmt fmt-check doctor self-test cross-build package sbom release clean
 
 all: build
 
 build:
 	@mkdir -p bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/daegsa ./cmd/daegsa
+
+build-gui:
+	@mkdir -p bin
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/daegsa-gui ./cmd/daegsa-gui
+
+gui:
+	go run ./cmd/daegsa-gui
 
 test:
 	go test -count=1 ./...

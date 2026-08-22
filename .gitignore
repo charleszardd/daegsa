@@ -2,3 +2,4 @@
 .codex/
 bin/
 dist/
+*.exe
