@@ -107,17 +107,20 @@ func (a *App) layout(gtx layout.Context) layout.Dimensions {
 			return a.layoutTopBar(gtx)
 		}),
 
-		// Middle Area: Navigation Rail + Main Content Canvas (Fills entire middle)
+		// Middle Area: Navigation Rail + Main Content Canvas (Fills entire middle vertically)
 		layout.Flexed(1.0, func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-				// Left Navigation Rail
+				// Left Navigation Rail (Fills full height)
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return a.layoutNavRail(gtx)
 				}),
 
-				// Main Content View Canvas (Occupies remaining full width)
+				// Main Content View Canvas (Occupies remaining full width & height)
 				layout.Flexed(1.0, func(gtx layout.Context) layout.Dimensions {
 					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
 
 					return layout.Inset{
 						Top:    unit.Dp(16),
@@ -270,19 +273,23 @@ func (a *App) layoutNavRail(gtx layout.Context) layout.Dimensions {
 	w := gtx.Dp(unit.Dp(195))
 	gtx.Constraints.Min.X = w
 	gtx.Constraints.Max.X = w
+	// Enforce 100% full vertical height spanning
+	gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
 
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			rect := image.Rectangle{Max: gtx.Constraints.Min}
 			paint.FillShape(gtx.Ops, a.Theme.BgSurface, clip.Rect(rect).Op())
 
-			// Right vertical border
+			// Right vertical border spanning entire height
 			borderW := gtx.Dp(unit.Dp(1))
 			borderRect := image.Rect(rect.Max.X-borderW, 0, rect.Max.X, rect.Max.Y)
 			paint.FillShape(gtx.Ops, a.Theme.Border, clip.Rect(borderRect).Op())
 			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+
 			return layout.Flex{
 				Axis:    layout.Vertical,
 				Spacing: layout.SpaceBetween,
@@ -301,7 +308,7 @@ func (a *App) layoutNavRail(gtx layout.Context) layout.Dimensions {
 					})
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Bottom: unit.Dp(14), Left: unit.Dp(16), Right: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Bottom: unit.Dp(16), Left: unit.Dp(16), Right: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								lbl := material.Label(a.Theme.Material, unit.Sp(10), "DAEGSA ENGINE")
