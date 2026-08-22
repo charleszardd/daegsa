@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -160,15 +161,111 @@ func TestCLI_Run_DestructiveAuthorized(t *testing.T) {
 	}
 }
 
-func TestCLI_Run_ExecuteAgainstTestTarget(t *testing.T) {
+func TestCLI_Run_ExecuteClosedModel_Success(t *testing.T) {
 	server := testtarget.NewServer()
 	defer server.Close()
 
 	ctx := context.Background()
-	// Execute GET request against live test target
-	code := ExecuteContext(ctx, []string{"run", "--url", server.URL() + "?status=200"})
+	// Execute closed model run with 5 users for 200ms
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL(),
+		"--model", "closed",
+		"--users", "5",
+		"--duration", "200ms",
+	})
 	if code != core.ExitCodeSuccess {
-		t.Errorf("expected exit code 0 for successful execution, got %d", code)
+		t.Errorf("expected exit code 0 for closed model load run, got %d", code)
+	}
+}
+
+func TestCLI_Run_ExecuteClosedModel_OutputJSON(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	outJSON := filepath.Join(tmpDir, "report.json")
+
+	ctx := context.Background()
+	// Execute closed model run and export report to JSON
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL(),
+		"--model", "closed",
+		"--users", "4",
+		"--duration", "150ms",
+		"--output-json", outJSON,
+	})
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read exported JSON report: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse exported JSON report: %v", err)
+	}
+
+	if int(parsed["report_schema_version"].(float64)) != 1 {
+		t.Errorf("expected report_schema_version 1, got %v", parsed["report_schema_version"])
+	}
+	reqCounts := parsed["request_counts"].(map[string]interface{})
+	if reqCounts["completed"].(float64) <= 0 {
+		t.Errorf("expected completed requests > 0, got %v", reqCounts["completed"])
+	}
+}
+
+func TestCLI_Run_ExecuteClosedModel_FromConfigFile(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "closed_test.yaml")
+	yamlContent := `
+schema_version: 1
+name: cli-closed-yaml-test
+request:
+  url: ` + server.URL() + `
+  method: GET
+load:
+  model: closed
+  users: 3
+  duration: 150ms
+  think_time: 10ms
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	ctx := context.Background()
+	code := ExecuteContext(ctx, []string{"run", "--config", configFile})
+	if code != core.ExitCodeSuccess {
+		t.Errorf("expected exit code 0 for closed config execution, got %d", code)
+	}
+}
+
+func TestCLI_Run_ExecuteClosedModel_UnexpectedStatus_ReturnsExitCode1(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	// Target returns 500 -> ExitCodeThresholdFailure (1)
+	code := ExecuteContext(ctx, []string{
+		"run",
+		"--url", server.URL() + "/?status=500",
+		"--model", "closed",
+		"--users", "2",
+		"--duration", "100ms",
+	})
+	if code != core.ExitCodeThresholdFailure {
+		t.Errorf("expected exit code 1 (FAIL_THRESHOLDS) for status 500, got %d (%s)", code, code)
 	}
 }
 
@@ -204,18 +301,6 @@ func TestCLI_DetermineExitCode_Mapping(t *testing.T) {
 	errRuntime := errors.New("unhandled network error")
 	if code := DetermineExitCode(errRuntime); code != core.ExitCodeRuntimeFailure {
 		t.Errorf("expected ExitCodeRuntimeFailure for generic error, got %d", code)
-	}
-}
-
-func TestCLI_Run_UnexpectedStatus_ReturnsExitCode1(t *testing.T) {
-	server := testtarget.NewServer()
-	defer server.Close()
-
-	ctx := context.Background()
-	// GET request returning 500 when expecting 200 -> ExitCodeThresholdFailure (1)
-	code := ExecuteContext(ctx, []string{"run", "--url", server.URL() + "?status=500"})
-	if code != core.ExitCodeThresholdFailure {
-		t.Errorf("expected exit code 1 (FAIL_THRESHOLDS) for status 500, got %d (%s)", code, code)
 	}
 }
 

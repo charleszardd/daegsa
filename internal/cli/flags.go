@@ -24,6 +24,7 @@ type flagValues struct {
 	allowDestructive  bool
 	dryRun            bool
 	nonInteractive    bool
+	outputJSON        string
 }
 
 func addCommonFlags(fs *pflag.FlagSet, f *flagValues) {
@@ -42,6 +43,7 @@ func addCommonFlags(fs *pflag.FlagSet, f *flagValues) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "Print sanitized execution plan without sending test traffic")
 	fs.BoolVar(&f.nonInteractive, "non-interactive", false, "Disable interactive prompts (CI mode)")
 	fs.BoolVar(&f.allowDestructive, "allow-destructive", false, "Authorize non-idempotent HTTP methods (POST, PUT, PATCH, DELETE)")
+	fs.StringVarP(&f.outputJSON, "output-json", "o", "", "Write test report to formatted JSON file")
 }
 
 func (f *flagValues) toCLIFlags() *config.CLIFlags {

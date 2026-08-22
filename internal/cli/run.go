@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charleszardd/daegsa/internal/config"
+	"github.com/charleszardd/daegsa/internal/clock"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/executor"
+	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/plan"
+	"github.com/charleszardd/daegsa/internal/report"
+	"github.com/charleszardd/daegsa/internal/scheduler"
 	"github.com/spf13/cobra"
 )
 
@@ -30,67 +33,82 @@ func newRunCmd() *cobra.Command {
 				return nil
 			}
 
-			// Phase 1 execution: single-request test and classification
 			exec, err := executor.NewHTTPExecutor(p)
 			if err != nil {
 				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
 			}
 			defer exec.Close()
 
-			res, err := exec.ExecuteRequest(cmd.Context())
-			if err != nil {
-				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
+			var agg *metrics.AggregatedMetrics
+			var health *metrics.GeneratorHealth
+			var runErr error
+
+			startTime := time.Now().UTC()
+
+			if p.Model == core.WorkloadModelClosed {
+				sched, err := scheduler.NewClosedScheduler(p, exec, clock.NewRealClock())
+				if err != nil {
+					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
+				}
+				agg, health, runErr = sched.Run(cmd.Context())
+			} else {
+				// Single-request execution for open model baseline (until open arrival scheduler in Phase 3)
+				res, execErr := exec.ExecuteRequest(cmd.Context())
+				if execErr != nil {
+					runErr = execErr
+				} else {
+					wm := metrics.NewWorkerMetrics(0)
+					wm.Planned = 1
+					wm.Started = 1
+					wm.Completed = 1
+					wm.RecordResult(res)
+					agg, _ = metrics.MergeWorkers([]*metrics.WorkerMetrics{wm}, res.Latency)
+					h := metrics.NewGeneratorHealthSampler(clock.NewRealClock()).Collect()
+					health = &h
+				}
 			}
 
-			printExecutionResult(p, res)
+			endTime := time.Now().UTC()
+			incomplete := (runErr != nil) || (cmd.Context().Err() != nil)
+
+			rep := report.BuildReport(p, agg, health, startTime, endTime, incomplete)
+
+			// Print terminal report
+			fmt.Print(report.FormatTerminalReport(rep, p))
+
+			// Write JSON report if requested
+			if flags.outputJSON != "" {
+				if err := report.WriteJSONReport(flags.outputJSON, rep); err != nil {
+					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
+				}
+			}
+
+			if runErr != nil {
+				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: runErr}
+			}
+
+			if rep.Incomplete {
+				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: fmt.Errorf("test execution incomplete")}
+			}
 
 			// Determine test pass/fail
-			if res.Outcome == core.OutcomeSuccess || (res.Outcome == core.OutcomeRateLimited && p.Treat429AsExpected) {
-				return nil
+			if rep.RequestCounts.Completed > 0 {
+				successCount := rep.Outcomes[core.OutcomeSuccess]
+				if p.Treat429AsExpected {
+					successCount += rep.Outcomes[core.OutcomeRateLimited]
+				}
+				if successCount < rep.RequestCounts.Completed {
+					return &CLIExitError{
+						Code: core.ExitCodeThresholdFailure,
+						Err:  fmt.Errorf("test completed with %d failures out of %d requests", rep.RequestCounts.Completed-successCount, rep.RequestCounts.Completed),
+					}
+				}
 			}
 
-			return &CLIExitError{
-				Code: core.ExitCodeThresholdFailure,
-				Err:  fmt.Errorf("request finished with outcome: %s (status: %d)", res.Outcome, res.StatusCode),
-			}
+			return nil
 		},
 	}
 
 	addCommonFlags(cmd.Flags(), &flags)
 	return cmd
-}
-
-func printExecutionResult(p *plan.Plan, res *executor.Result) {
-	fmt.Printf("\n--- DAEGSA Request Execution Result ---\n")
-	fmt.Printf("Target:     %s %s\n", p.Method, config.RedactURL(p.TargetURL.String()))
-	if res.StatusCode > 0 {
-		fmt.Printf("Status:     %d (%s)\n", res.StatusCode, res.Protocol)
-	} else {
-		fmt.Printf("Status:     <none>\n")
-	}
-	fmt.Printf("Outcome:    %s\n", res.Outcome)
-	fmt.Printf("Latency:    %v (TTFB: %v)\n", res.Latency, res.TTFB)
-	fmt.Printf("Bytes:      Sent %d bytes, Received %d bytes\n", res.BytesSent, res.BytesReceived)
-
-	if res.RateLimitInfo != nil {
-		if res.RateLimitInfo.RetryAfterSeconds != nil {
-			fmt.Printf("RateLimit:  Retry-After = %d seconds\n", *res.RateLimitInfo.RetryAfterSeconds)
-		} else if res.RateLimitInfo.RetryAfterDate != nil {
-			fmt.Printf("RateLimit:  Retry-After = %s\n", res.RateLimitInfo.RetryAfterDate.Format(time.RFC1123))
-		}
-		if res.RateLimitInfo.Limit != nil {
-			fmt.Printf("RateLimit:  Limit = %d\n", *res.RateLimitInfo.Limit)
-		}
-		if res.RateLimitInfo.Remaining != nil {
-			fmt.Printf("RateLimit:  Remaining = %d\n", *res.RateLimitInfo.Remaining)
-		}
-		if res.RateLimitInfo.ResetSeconds != nil {
-			fmt.Printf("RateLimit:  Reset = %d seconds\n", *res.RateLimitInfo.ResetSeconds)
-		}
-	}
-
-	if res.Err != nil {
-		fmt.Printf("Error:      %v\n", res.Err)
-	}
-	fmt.Printf("---------------------------------------\n")
 }
