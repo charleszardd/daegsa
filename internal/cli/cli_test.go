@@ -1148,3 +1148,84 @@ safety:
 		t.Errorf("expected failing step threshold mentioned in stderr: %s", stderr.String())
 	}
 }
+
+func TestCLI_Doctor(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Standard doctor command
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := executeContext(ctx, []string{"doctor"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for doctor, got %d; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "DAEGSA SYSTEM DIAGNOSTICS") {
+		t.Errorf("expected doctor banner in stdout, got: %s", stdout.String())
+	}
+
+	// 2. Verbose doctor command
+	stdout.Reset()
+	stderr.Reset()
+	code = executeContext(ctx, []string{"doctor", "--verbose"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for doctor --verbose, got %d; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Duration") {
+		t.Errorf("expected duration details in verbose doctor stdout")
+	}
+
+	// 3. JSON doctor command
+	stdout.Reset()
+	stderr.Reset()
+	code = executeContext(ctx, []string{"doctor", "--json"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for doctor --json, got %d; stderr: %s", code, stderr.String())
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("failed to parse doctor JSON output: %v; output=%s", err, stdout.String())
+	}
+	if _, ok := parsed["overall_status"]; !ok {
+		t.Errorf("expected overall_status in JSON output")
+	}
+}
+
+func TestCLI_SelfTest(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Standard self-test command
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := executeContext(ctx, []string{"self-test"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for self-test, got %d; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ALL SELF-TESTS PASSED") {
+		t.Errorf("expected pass summary in stdout, got: %s", stdout.String())
+	}
+
+	// 2. Verbose self-test command
+	stdout.Reset()
+	stderr.Reset()
+	code = executeContext(ctx, []string{"self-test", "--verbose"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for self-test --verbose, got %d; stderr: %s", code, stderr.String())
+	}
+
+	// 3. JSON self-test command
+	stdout.Reset()
+	stderr.Reset()
+	code = executeContext(ctx, []string{"self-test", "--json"}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("expected exit code 0 for self-test --json, got %d; stderr: %s", code, stderr.String())
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("failed to parse self-test JSON output: %v; output=%s", err, stdout.String())
+	}
+	if parsed["passed"] != true {
+		t.Errorf("expected passed=true in JSON")
+	}
+}

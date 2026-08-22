@@ -7,11 +7,24 @@ import (
 	"os"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/report"
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	// Synchronize report metadata with build-injected CLI version variables (§13, §15)
+	report.DefaultDaegsaVersion = Version
+	report.DefaultCommit = Commit
+	report.DefaultBuildDate = BuildDate
+}
+
 // NewRootCmd creates the root Cobra command for DAEGSA (§3, §5, §15).
 func NewRootCmd() *cobra.Command {
+	// Ensure synchronized version metadata
+	report.DefaultDaegsaVersion = Version
+	report.DefaultCommit = Commit
+	report.DefaultBuildDate = BuildDate
+
 	rootCmd := &cobra.Command{
 		Use:   "daegsa",
 		Short: "DAEGSA - REST API Load, Capacity, and Rate-Limit Testing CLI",
@@ -25,6 +38,8 @@ spike, soak, and rate-limit testing with explicit open and closed workload model
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newCompareCmd())
+	rootCmd.AddCommand(newDoctorCmd())
+	rootCmd.AddCommand(newSelfTestCmd())
 
 	return rootCmd
 }

@@ -1,27 +1,26 @@
 # DAEGSA Progress Record
 
-Canonical phase: Phase 7 - Multi-Step Scenarios
+Canonical phase: Phase 8 - Distribution and Production Hardening
 Tranche: entire phase
 Status: COMMITTED
 
-Intended commit subject: `feat(scenario): add multi-step scenarios, variable extraction, and per-step thresholds`
+Intended commit subject: `feat(dist): add doctor, self-test, build automation, sbom, and operational runbooks`
 
 ## Acceptance evidence summary
 
-- **Deterministic multi-step scenario execution (§2, §4, §7, §8):** Closed workload model orchestrates sequential multi-step HTTP request pipelines for each virtual user. Response extraction dynamically passes extracted tokens, user IDs, and session cookies to downstream steps via `${var}` variable substitution across step URLs, headers, and request bodies.
-- **Strict per-VU state and cookie isolation (§2, §11):** Verified with 10 concurrent virtual user workers executing 5 iterations each (`TestScenarioIsolation_ConcurrentVUs`); each worker maintains isolated `VUState.Variables` and an independent `http.CookieJar` without cross-worker leakage.
-- **Configurable step failure policies (§6, §7):** `on_failure: stop` terminates only the active iteration and proceeds to the next iteration; `on_failure: abort_vu` aborts the virtual user immediately; `on_failure: continue` continues subsequent steps in the iteration. Extraction errors cleanly record failure and trigger the configured policy.
-- **Step-level metrics and threshold evaluation (§6, §9, §10, §13):** Step latency histograms (p50, p90, p95, p99), request counts, status codes, and error rates are tracked per worker and merged into step aggregates, reconciling with root totals. Step-specific thresholds (`step.<step_name>.<metric>`) parse, validate, and evaluate accurately against step metrics snapshots, returning exit code 1 on violation.
-- **Safety preflight and redaction hardening (§11, §12):** Preflight resolves and validates all scenario step URLs, HTTP methods, and body limits against host allowlists and destructive method safeguards prior to traffic generation. Extracted variables, session tokens, and cookie values are scrubbed from reports and logs.
-- **Reporting and JSON schema (§13):** Terminal reports include a formatted `SCENARIO STEPS` table; versioned JSON reports include a typed `scenario` structure with iteration counts and per-step outcome summaries.
-- **Deterministic test targets (§0):** Mock endpoints (`/auth/login`, `/api/items`, `/api/logout`, `/scenario/fail-step`, `/scenario/dynamic`) verify workflow chaining, token validation, cookie sessions, and error handling.
-- **Validation suite:** All repository tests (`go test -count=1 ./...`), `go vet ./...`, `gofmt -l .`, and `git diff --check` passed cleanly across all 17 packages.
+- **`daegsa doctor` System Diagnostics (§14, §15):** Comprehensive local diagnostics engine (`internal/doctor`) evaluating monotonic timer resolution, loopback DNS resolution, TLS 1.2/1.3 cipher suite negotiation and system root CA pool, TCP socket pair allocation and limits, and CPU/memory headroom. Outputs formatted terminal tables with clear PASS/WARN/FAIL badges and actionable remediation suggestions, with full machine-readable JSON export (`--json`) and canonical exit codes (0 on PASS/WARN, 3 on FAIL).
+- **`daegsa self-test` Automated Suite (§14, §15):** In-process deterministic end-to-end verification engine (`internal/selftest`) executing 5 sub-tests against an embedded in-memory `testtarget.TargetServer`: closed-model VU loop, open-model arrival pacing with `max_in_flight` drop bounds, multi-step scenario token extraction and cookie chaining, threshold evaluation pass/fail detection, and Schema v1 report serialization. Streams real-time progress to stdout and returns canonical exit codes.
+- **Reproducible Multi-Platform Packaging & Automation (§3, §5, §13, §15):** `Makefile`, `scripts/build.ps1`, and `scripts/package.go` automate reproducible `-trimpath` builds with `-ldflags` injection for `Version`, `Commit`, and `BuildDate` across 4 target platforms (`windows/amd64`, `linux/amd64`, `darwin/amd64`, `darwin/arm64`). Generates `.zip` (Windows) and `.tar.gz` (Unix) release archives along with cryptographic `dist/SHA256SUMS`.
+- **Software Bill of Materials (SBOM) (§11, §15):** `scripts/sbom.go` generates a compliant CycloneDX 1.5 JSON SBOM (`dist/sbom-cyclonedx.json`) listing all direct and indirect dependencies with module paths, versions, and hashes, strictly excluding local build paths and environment secrets.
+- **Comprehensive Operational Documentation (§5, §11, §12):** Authored `docs/OPERATIONS.md` (351-line operator manual covering CLI commands, open vs closed workload models, step-by-step capacity testing, rate-limit analysis, multi-step scenarios, and CI integration) and `docs/SAFETY_RUNBOOK.md` (136-line production safety manual covering host allowlisting, destructive method authorization, redirect policies, credential redaction, hard safety ceilings, and emergency stop procedures).
+- **Standalone Windows Release Smoke Test (§1, §15, §19):** Built standalone `dist/daegsa.exe` and verified clean execution of `version`, `doctor`, `self-test`, `validate`, and `run --dry-run` without requiring Go, Node.js, Python, or Docker.
+- **Full Verification Suite:** 100% of unit, integration, and CLI tests pass cleanly (`go test ./...`), `go vet ./...` reports 0 issues, `gofmt -l .` reports 0 unformatted files, and `git diff --check` passes cleanly.
 
 ## Remaining phase/tranche work
 
-- Phase 7 has no remaining defects or unfulfilled requirements.
-- Race detection (`go test -race ./...`) should be executed when running in an environment with a C compiler (CGO enabled).
+- All 8 phases of the DAEGSA Implementation Plan are now complete and verified.
+- Race detector verification (`make test-race`) remains documented and available for CGO-enabled CI environments.
 
 ## Next recommended reader scope
 
-- **Phase 8 - Distribution and Production Hardening:** Standalone Windows AMD64 release workflow, checksums, embedded version metadata, SBOM, `-trimpath` reproducible builds, release smoke tests, `doctor` command, local self-test, and operational runbook.
+- DAEGSA v1 production readiness, release distribution, and operator deployment.
