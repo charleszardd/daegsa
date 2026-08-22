@@ -125,11 +125,11 @@ func (b BrandHeader) Layout(gtx layout.Context, th *material.Theme) layout.Dimen
 					lbl.TextSize = unit.Sp(16)
 					return lbl.Layout(gtx)
 				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(th, unit.Sp(10), "LOAD & CAPACITY STUDIO")
-					lbl.Color = color.NRGBA{R: 88, G: 166, B: 255, A: 200}
-					return lbl.Layout(gtx)
-				}),
+				// layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				// 	lbl := material.Label(th, unit.Sp(10), "")
+				// 	lbl.Color = color.NRGBA{R: 88, G: 166, B: 255, A: 200}
+				// 	return lbl.Layout(gtx)
+				// }),
 			)
 		}),
 	)
