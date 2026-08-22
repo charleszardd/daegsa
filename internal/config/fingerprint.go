@@ -45,6 +45,7 @@ func cloneConfigSanitized(cfg *Config) *Config {
 			GracefulStop: cfg.Load.GracefulStop,
 			Users:        cfg.Load.Users,
 			ThinkTime:    cfg.Load.ThinkTime,
+			Segments:     make([]ProfileSegmentConfig, len(cfg.Load.Segments)),
 		},
 		RateLimit: RateLimitConfig{
 			Treat429AsExpected: cfg.RateLimit.Treat429AsExpected,
@@ -78,6 +79,7 @@ func cloneConfigSanitized(cfg *Config) *Config {
 
 	copy(c.Request.ExpectedStatuses, cfg.Request.ExpectedStatuses)
 	copy(c.Safety.AllowedHosts, cfg.Safety.AllowedHosts)
+	copy(c.Load.Segments, cfg.Load.Segments)
 
 	if cfg.Request.Headers != nil {
 		c.Request.Headers = RedactHeaders(cfg.Request.Headers)

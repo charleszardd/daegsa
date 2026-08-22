@@ -70,5 +70,5 @@ func estimateRequestBytes(req *http.Request, bodyLen int64) int64 {
 	}
 	headerBytes += len("\r\n") // end of headers
 
-	return int64(lineLen + headerBytes) + bodyLen
+	return int64(lineLen+headerBytes) + bodyLen
 }

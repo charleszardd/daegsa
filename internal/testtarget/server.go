@@ -16,13 +16,13 @@ const maxRecordedRequests = 10000
 
 // RecordedRequest captures full metadata of an incoming HTTP request for test assertions.
 type RecordedRequest struct {
-	Method     string              `json:"method"`
-	URL        string              `json:"url"`
-	Path       string              `json:"path"`
-	Header     http.Header         `json:"header"`
-	Body       []byte              `json:"body"`
-	RemoteAddr string              `json:"remote_addr"`
-	Time       time.Time           `json:"time"`
+	Method     string      `json:"method"`
+	URL        string      `json:"url"`
+	Path       string      `json:"path"`
+	Header     http.Header `json:"header"`
+	Body       []byte      `json:"body"`
+	RemoteAddr string      `json:"remote_addr"`
+	Time       time.Time   `json:"time"`
 }
 
 // Option configures the TargetServer.

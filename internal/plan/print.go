@@ -45,7 +45,14 @@ func FormatPlanSummary(p *Plan) string {
 		sb.WriteString("--------------------------------------------------------------------------------\n")
 		sb.WriteString("                         OPEN WORKLOAD PARAMETERS\n")
 		sb.WriteString("--------------------------------------------------------------------------------\n")
-		sb.WriteString(fmt.Sprintf("Target Rate:          %.2f requests / %v\n", p.Rate, p.TimeUnit))
+		if len(p.CompiledSegments) > 0 && p.SchemaVersion >= config.ExpectedSchemaVersion {
+			sb.WriteString(fmt.Sprintf("Peak Target RPS:      %.2f\n", p.PeakTargetRPS))
+			for _, segment := range p.CompiledSegments {
+				sb.WriteString(fmt.Sprintf("  Segment %d: %s [%s], %.2f req/s, %v\n", segment.Index, segment.Name, segment.Stage, segment.TargetRPS, segment.Duration))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("Target Rate:          %.2f requests / %v\n", p.Rate, p.TimeUnit))
+		}
 		sb.WriteString(fmt.Sprintf("Max In-Flight:        %d\n", p.MaxInFlight))
 		sb.WriteString(fmt.Sprintf("Test Duration:        %v\n", p.Duration))
 		sb.WriteString(fmt.Sprintf("Graceful Stop:        %v\n", p.GracefulStop))

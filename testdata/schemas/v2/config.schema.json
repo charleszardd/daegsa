@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DAEGSA Configuration Schema v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "request",
+    "load"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2,
+      "description": "Schema version, must be 1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier for the load test"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "method"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "expected_statuses": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "response_body_limit": {
+          "type": "string"
+        },
+        "redirects": {
+          "type": "string",
+          "enum": [
+            "same-origin",
+            "none",
+            "all"
+          ]
+        }
+      }
+    },
+    "load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "max_in_flight",
+        "segments"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": [
+            "open"
+          ]
+        },
+        "time_unit": {
+          "type": "string"
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "graceful_stop": {
+          "type": "string"
+        },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "stage",
+              "duration"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "warmup",
+                  "measured",
+                  "cooldown"
+                ]
+              },
+              "duration": {
+                "type": "string"
+              },
+              "rate": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "start_rate": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "end_rate": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "steps": {
+                "type": "integer",
+                "minimum": 2
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "rate"
+                ]
+              },
+              {
+                "required": [
+                  "start_rate",
+                  "end_rate",
+                  "steps"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "treat_429_as_expected": {
+          "type": "boolean"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "bearer",
+            "custom_header",
+            "token_pool",
+            "basic"
+          ]
+        },
+        "token": {
+          "type": "string"
+        },
+        "header_name": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "token_pool": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cookie_jar": {
+          "type": "boolean"
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_non_idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

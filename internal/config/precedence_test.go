@@ -28,12 +28,12 @@ load:
 	}
 
 	flags := &CLIFlags{
-		URL:         "https://override.example.com/other",
-		Method:      "POST",
-		Rate:        150,
-		Duration:    45 * time.Second,
-		Timeout:     8 * time.Second,
-		MaxInFlight: 600,
+		URL:              "https://override.example.com/other",
+		Method:           "POST",
+		Rate:             150,
+		Duration:         45 * time.Second,
+		Timeout:          8 * time.Second,
+		MaxInFlight:      600,
 		AllowDestructive: true,
 	}
 
@@ -173,5 +173,37 @@ load:
 	}
 	if cfg.Request.Redirects != "none" {
 		t.Errorf("expected Redirects 'none', got %q", cfg.Request.Redirects)
+	}
+}
+
+func TestApplyCLIOverrides_SegmentConflicts(t *testing.T) {
+	yamlData := []byte(`
+schema_version: 2
+name: profile-test
+request:
+  url: https://api.example.com/items
+  method: GET
+load:
+  model: open
+  time_unit: 1s
+  max_in_flight: 50
+  segments:
+    - {name: m, stage: measured, duration: 10s, rate: 20}
+`)
+
+	cfg1, err := ParseAndValidateYAML(yamlData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyCLIOverrides(cfg1, &CLIFlags{Rate: 100}); err == nil {
+		t.Error("expected error when overriding segmented profile with --rate")
+	}
+
+	cfg2, err := ParseAndValidateYAML(yamlData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyCLIOverrides(cfg2, &CLIFlags{Duration: 30 * time.Second}); err == nil {
+		t.Error("expected error when overriding segmented profile with --duration")
 	}
 }

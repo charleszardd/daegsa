@@ -55,10 +55,14 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 			cfg.Load.Rate = 0
 			cfg.Load.TimeUnit = 0
 			cfg.Load.MaxInFlight = 0
+			cfg.Load.Segments = nil
 		}
 	}
 
 	if flags.Rate > 0 {
+		if len(cfg.Load.Segments) > 0 {
+			return fmt.Errorf("%w: --rate cannot override a segmented profile", ErrConfigValidation)
+		}
 		cfg.Load.Rate = flags.Rate
 	}
 	if flags.TimeUnit > 0 {
@@ -68,6 +72,9 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 		cfg.Load.Users = flags.Users
 	}
 	if flags.Duration > 0 {
+		if len(cfg.Load.Segments) > 0 {
+			return fmt.Errorf("%w: --duration cannot override a segmented profile", ErrConfigValidation)
+		}
 		cfg.Load.Duration = Duration(flags.Duration)
 	}
 	if flags.Timeout > 0 {
@@ -88,7 +95,7 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 
 	// Provide sensible defaults for pure CLI executions without config file
 	if cfg.SchemaVersion == 0 {
-		cfg.SchemaVersion = ExpectedSchemaVersion
+		cfg.SchemaVersion = LegacySchemaVersion
 	}
 	if cfg.Name == "" {
 		cfg.Name = "cli-execution"
@@ -109,7 +116,7 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 			}
 		}
 	}
-	if cfg.Load.Duration.Duration() <= 0 {
+	if len(cfg.Load.Segments) == 0 && cfg.Load.Duration.Duration() <= 0 {
 		cfg.Load.Duration = Duration(10 * time.Second)
 	}
 

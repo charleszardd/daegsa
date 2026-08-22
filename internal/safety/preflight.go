@@ -75,13 +75,26 @@ func (e *PreflightEngine) Check(ctx context.Context, cfg *config.Config, flags S
 	}
 
 	// 3. Safety Ceiling Enforcement
-	if cfg.Load.Duration.Duration() > MaxAllowedDuration {
-		return nil, fmt.Errorf("%w: %w: duration %v exceeds hard ceiling %v",
-			ErrSafetyRefusal, ErrSafetyCeilingExceeded, cfg.Load.Duration, MaxAllowedDuration)
+	effectiveDuration := cfg.Load.Duration.Duration()
+	peakTargetRPS := cfg.Load.Rate
+	if cfg.Load.TimeUnit.Duration() > 0 {
+		peakTargetRPS = cfg.Load.Rate / cfg.Load.TimeUnit.Duration().Seconds()
 	}
-	if cfg.Load.Rate > MaxAllowedRate {
-		return nil, fmt.Errorf("%w: %w: rate %v exceeds hard ceiling %v",
-			ErrSafetyRefusal, ErrSafetyCeilingExceeded, cfg.Load.Rate, MaxAllowedRate)
+	if len(cfg.Load.Segments) > 0 {
+		compiled, compileErr := config.CompileLoadProfile(&cfg.Load)
+		if compileErr != nil {
+			return nil, compileErr
+		}
+		effectiveDuration = compiled.TotalDuration
+		peakTargetRPS = compiled.PeakTargetRPS
+	}
+	if effectiveDuration > MaxAllowedDuration {
+		return nil, fmt.Errorf("%w: %w: duration %v exceeds hard ceiling %v",
+			ErrSafetyRefusal, ErrSafetyCeilingExceeded, effectiveDuration, MaxAllowedDuration)
+	}
+	if peakTargetRPS > MaxAllowedRate {
+		return nil, fmt.Errorf("%w: %w: peak target RPS %v exceeds hard ceiling %v",
+			ErrSafetyRefusal, ErrSafetyCeilingExceeded, peakTargetRPS, MaxAllowedRate)
 	}
 	if cfg.Load.Users > MaxAllowedUsers {
 		return nil, fmt.Errorf("%w: %w: users %d exceeds hard ceiling %d",

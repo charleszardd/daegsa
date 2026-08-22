@@ -38,21 +38,25 @@ type LatencySummary struct {
 
 // AggregatedMetrics holds the centrally merged metrics from all workers (§4, §9, §13).
 type AggregatedMetrics struct {
-	RequestCounts       RequestCounts
-	Outcomes            map[core.Outcome]int64
-	StatusCodes         map[string]int64
-	Latency             LatencySummary
-	AllLatencyHist      Histogram
-	SuccessLatencyHist  Histogram
-	RateLimits          RateLimitObservations
-	TotalBytesSent      int64
-	TotalBytesReceived  int64
-	Duration            time.Duration
-	AchievedStartRPS    float64
-	CompletedThroughput float64
-	ErrorRate           float64
-	RateLimitedRate     float64
-	ErrorSamples        []ErrorSample
+	RequestCounts         RequestCounts
+	Outcomes              map[core.Outcome]int64
+	StatusCodes           map[string]int64
+	Latency               LatencySummary
+	AllLatencyHist        Histogram
+	SuccessLatencyHist    Histogram
+	RateLimits            RateLimitObservations
+	TotalBytesSent        int64
+	TotalBytesReceived    int64
+	Duration              time.Duration
+	AchievedStartRPS      float64
+	CompletedThroughput   float64
+	ErrorRate             float64
+	RateLimitedRate       float64
+	ErrorSamples          []ErrorSample
+	SchedulerLagMaxMS     float64
+	FirstThrottleOffsetNS int64
+	Segments              []SegmentMetrics
+	Measured              *AggregatedMetrics
 }
 
 // MergeWorkers merges worker-local metric accumulators into a unified AggregatedMetrics snapshot (§4, §9, §13).
@@ -71,7 +75,10 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 	var observed429Count int64
 	var retryAfterSamples []string
 	var rateLimitHeaders []RateLimitHeaderSample
+	headerConsistency := make(map[string]HeaderConsistency)
 	var mergedErrors []ErrorSample
+	var schedulerLagMaxMS float64
+	firstThrottleOffsetNS := int64(-1)
 
 	for _, w := range workers {
 		if w == nil {
@@ -116,10 +123,18 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 				retryAfterSamples = append(retryAfterSamples, sample)
 			}
 		}
+		mergeHeaderConsistency(headerConsistency, w.RateLimits.HeaderConsistency)
 		for _, hdr := range w.RateLimits.RateLimitHeaders {
 			if len(rateLimitHeaders) < MaxRateLimitSamples && !containsHeaderSample(rateLimitHeaders, hdr) {
 				rateLimitHeaders = append(rateLimitHeaders, hdr)
 			}
+		}
+
+		if w.SchedulerLagMaxMS > schedulerLagMaxMS {
+			schedulerLagMaxMS = w.SchedulerLagMaxMS
+		}
+		if w.FirstThrottleOffsetNS >= 0 && (firstThrottleOffsetNS < 0 || w.FirstThrottleOffsetNS < firstThrottleOffsetNS) {
+			firstThrottleOffsetNS = w.FirstThrottleOffsetNS
 		}
 
 		// Merge error samples
@@ -168,25 +183,28 @@ func MergeWorkers(workers []*WorkerMetrics, duration time.Duration) (*Aggregated
 	}
 
 	return &AggregatedMetrics{
-		RequestCounts:       reqCounts,
-		Outcomes:            outcomes,
-		StatusCodes:         statusCodes,
-		Latency:             latencySummary,
-		AllLatencyHist:      allLatencyHist,
-		SuccessLatencyHist:  successLatencyHist,
+		RequestCounts:      reqCounts,
+		Outcomes:           outcomes,
+		StatusCodes:        statusCodes,
+		Latency:            latencySummary,
+		AllLatencyHist:     allLatencyHist,
+		SuccessLatencyHist: successLatencyHist,
 		RateLimits: RateLimitObservations{
 			Observed429Count:  observed429Count,
 			RetryAfterSamples: retryAfterSamples,
 			RateLimitHeaders:  rateLimitHeaders,
+			HeaderConsistency: headerConsistency,
 		},
-		TotalBytesSent:      totalBytesSent,
-		TotalBytesReceived:  totalBytesReceived,
-		Duration:            duration,
-		AchievedStartRPS:    startRPS,
-		CompletedThroughput: throughput,
-		ErrorRate:           errorRate,
-		RateLimitedRate:     rateLimitedRate,
-		ErrorSamples:        mergedErrors,
+		TotalBytesSent:        totalBytesSent,
+		TotalBytesReceived:    totalBytesReceived,
+		Duration:              duration,
+		AchievedStartRPS:      startRPS,
+		CompletedThroughput:   throughput,
+		ErrorRate:             errorRate,
+		RateLimitedRate:       rateLimitedRate,
+		ErrorSamples:          mergedErrors,
+		SchedulerLagMaxMS:     schedulerLagMaxMS,
+		FirstThrottleOffsetNS: firstThrottleOffsetNS,
 	}, nil
 }
 

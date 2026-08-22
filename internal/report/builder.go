@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/plan"
@@ -85,5 +86,11 @@ func BuildReport(
 		rep.GeneratorHealth = *health
 	}
 
+	redactRateLimitObservations(&rep.RateLimits, p)
+	if p == nil || p.SchemaVersion < config.ExpectedSchemaVersion {
+		rep.RateLimits.HeaderConsistency = nil
+		rep.GeneratorHealth.CPUAvailable = false
+	}
+	buildPhase6Report(rep, p, agg)
 	return rep
 }

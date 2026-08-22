@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/profile"
 	"github.com/charleszardd/daegsa/internal/threshold"
 	"gopkg.in/yaml.v3"
 )
@@ -60,8 +61,12 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	// 1. Schema version check
-	if cfg.SchemaVersion != ExpectedSchemaVersion {
-		return fmt.Errorf("%w: expected schema_version %d, got %d", ErrInvalidSchemaVersion, ExpectedSchemaVersion, cfg.SchemaVersion)
+	if cfg.SchemaVersion != LegacySchemaVersion && cfg.SchemaVersion != ExpectedSchemaVersion {
+		return fmt.Errorf("%w: supported schema_version values are %d and %d, got %d", ErrInvalidSchemaVersion, LegacySchemaVersion, ExpectedSchemaVersion, cfg.SchemaVersion)
+	}
+
+	if cfg.SchemaVersion == ExpectedSchemaVersion && len(cfg.Load.Segments) == 0 {
+		return fmt.Errorf("%w: schema_version %d requires load.segments", ErrConfigValidation, ExpectedSchemaVersion)
 	}
 
 	// 2. Name validation
@@ -75,7 +80,7 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	// 4. Load validation & normalization
-	if err := validateLoadConfig(&cfg.Load); err != nil {
+	if err := validateLoadConfig(&cfg.Load, cfg.SchemaVersion); err != nil {
 		return err
 	}
 
@@ -162,13 +167,9 @@ func validateRequestConfig(req *RequestConfig) error {
 	return nil
 }
 
-func validateLoadConfig(load *LoadConfig) error {
+func validateLoadConfig(load *LoadConfig, schemaVersion int) error {
 	if !load.Model.IsValid() {
 		return fmt.Errorf("%w: invalid load.model %q, must be 'open' or 'closed'", ErrConfigValidation, load.Model)
-	}
-
-	if load.Duration.Duration() <= 0 {
-		return fmt.Errorf("%w: load.duration must be > 0, got %v", ErrConfigValidation, load.Duration)
 	}
 
 	if load.GracefulStop.Duration() < 0 {
@@ -180,9 +181,6 @@ func validateLoadConfig(load *LoadConfig) error {
 
 	switch load.Model {
 	case core.WorkloadModelOpen:
-		if load.Rate <= 0 {
-			return fmt.Errorf("%w: open model requires load.rate > 0, got %v", ErrConfigValidation, load.Rate)
-		}
 		if load.TimeUnit.Duration() <= 0 {
 			load.TimeUnit = Duration(DefaultTimeUnit)
 		}
@@ -196,8 +194,32 @@ func validateLoadConfig(load *LoadConfig) error {
 		if load.ThinkTime.Duration() != 0 {
 			return fmt.Errorf("%w: open model cannot specify load.think_time", ErrConfigValidation)
 		}
+		if len(load.Segments) > 0 {
+			if schemaVersion != ExpectedSchemaVersion {
+				return fmt.Errorf("%w: load.segments requires schema_version %d", ErrConfigValidation, ExpectedSchemaVersion)
+			}
+			if load.Rate != 0 || load.Duration.Duration() != 0 {
+				return fmt.Errorf("%w: profile mode cannot specify load.rate or load.duration", ErrConfigValidation)
+			}
+			if err := validateProfileSegments(load.Segments); err != nil {
+				return err
+			}
+		} else {
+			if load.Rate <= 0 {
+				return fmt.Errorf("%w: open model requires load.rate > 0, got %v", ErrConfigValidation, load.Rate)
+			}
+			if load.Duration.Duration() <= 0 {
+				return fmt.Errorf("%w: load.duration must be > 0, got %v", ErrConfigValidation, load.Duration)
+			}
+		}
+		if _, err := CompileLoadProfile(load); err != nil {
+			return err
+		}
 
 	case core.WorkloadModelClosed:
+		if load.Duration.Duration() <= 0 {
+			return fmt.Errorf("%w: load.duration must be > 0, got %v", ErrConfigValidation, load.Duration)
+		}
 		if load.Users <= 0 {
 			return fmt.Errorf("%w: closed model requires load.users > 0, got %d", ErrConfigValidation, load.Users)
 		}
@@ -214,8 +236,49 @@ func validateLoadConfig(load *LoadConfig) error {
 		if load.MaxInFlight != 0 {
 			return fmt.Errorf("%w: closed model cannot specify load.max_in_flight", ErrConfigValidation)
 		}
+		if len(load.Segments) != 0 {
+			return fmt.Errorf("%w: closed model cannot specify load.segments", ErrConfigValidation)
+		}
 	}
 
+	return nil
+}
+
+func validateProfileSegments(segments []ProfileSegmentConfig) error {
+	if len(segments) == 0 || len(segments) > profile.MaxSourceSegments {
+		return fmt.Errorf("%w: load.segments count must be between 1 and %d", ErrConfigValidation, profile.MaxSourceSegments)
+	}
+	seenNames := make(map[string]struct{}, len(segments))
+	stageRank := map[string]int{profile.StageWarmup: 0, profile.StageMeasured: 1, profile.StageCooldown: 2}
+	previousRank := 0
+	hasMeasured := false
+	for index, segment := range segments {
+		name := strings.TrimSpace(segment.Name)
+		if name == "" || len(name) > profile.MaxSegmentNameLength {
+			return fmt.Errorf("%w: load.segments[%d].name must contain 1-%d characters", ErrConfigValidation, index, profile.MaxSegmentNameLength)
+		}
+		if _, exists := seenNames[name]; exists {
+			return fmt.Errorf("%w: duplicate profile segment name %q", ErrConfigValidation, name)
+		}
+		seenNames[name] = struct{}{}
+		rank, validStage := stageRank[segment.Stage]
+		if !validStage || rank < previousRank {
+			return fmt.Errorf("%w: invalid or out-of-order stage %q in segment %q", ErrConfigValidation, segment.Stage, name)
+		}
+		previousRank = rank
+		hasMeasured = hasMeasured || segment.Stage == profile.StageMeasured
+		if segment.Duration.Duration() <= 0 {
+			return fmt.Errorf("%w: segment %q duration must be positive", ErrConfigValidation, name)
+		}
+		isConstant := segment.Rate > 0 && segment.StartRate == 0 && segment.EndRate == 0 && segment.Steps == 0
+		isRamp := segment.Rate == 0 && segment.StartRate > 0 && segment.EndRate > 0 && segment.Steps >= 2
+		if !isConstant && !isRamp {
+			return fmt.Errorf("%w: segment %q must define either rate or start_rate/end_rate/steps>=2", ErrConfigValidation, name)
+		}
+	}
+	if !hasMeasured {
+		return fmt.Errorf("%w: profile requires at least one measured segment", ErrConfigValidation)
+	}
 	return nil
 }
 

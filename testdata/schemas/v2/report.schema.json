@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DAEGSA Report Schema v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report_schema_version", "daegsa_version", "commit", "build_date", "os", "arch", "config_fingerprint", "start_time_utc", "end_time_utc", "duration_ms", "workload_model", "request_counts", "outcomes", "status_codes", "latency", "rate_limits", "generator_health", "thresholds", "incomplete", "compiled_segments", "segments", "measured_summary", "calibration"],
+  "properties": {
+    "report_schema_version": {"const": 2},
+    "daegsa_version": {"type": "string"}, "commit": {"type": "string"}, "build_date": {"type": "string"},
+    "os": {"type": "string"}, "arch": {"type": "string"}, "config_fingerprint": {"type": "string"},
+    "start_time_utc": {"type": "string", "format": "date-time"}, "end_time_utc": {"type": "string", "format": "date-time"},
+    "duration_ms": {"type": "integer", "minimum": 0}, "workload_model": {"const": "open"},
+    "request_counts": {"$ref": "#/definitions/requestCounts"},
+    "outcomes": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "status_codes": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "latency": {"$ref": "#/definitions/latency"},
+    "rate_limits": {"$ref": "#/definitions/rateLimits"},
+    "generator_health": {"$ref": "#/definitions/generatorHealth"},
+    "auth": {"$ref": "#/definitions/auth"},
+    "thresholds": {"type": "array", "items": {"$ref": "#/definitions/threshold"}},
+    "incomplete": {"type": "boolean"},
+    "compiled_segments": {"type": "array", "maxItems": 256, "items": {"$ref": "#/definitions/segment"}},
+    "segments": {"type": "array", "maxItems": 256, "items": {"$ref": "#/definitions/segmentReport"}},
+    "measured_summary": {"$ref": "#/definitions/metricsSummary"},
+    "first_throttle": {"$ref": "#/definitions/firstThrottle"},
+    "calibration": {"$ref": "#/definitions/calibration"}
+  },
+  "definitions": {
+    "requestCounts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["planned", "scheduled", "started", "completed", "canceled", "dropped"],
+      "properties": {"planned": {"type": "integer", "minimum": 0}, "scheduled": {"type": "integer", "minimum": 0}, "started": {"type": "integer", "minimum": 0}, "completed": {"type": "integer", "minimum": 0}, "canceled": {"type": "integer", "minimum": 0}, "dropped": {"type": "integer", "minimum": 0}}
+    },
+    "percentiles": {
+      "type": "object", "additionalProperties": false,
+      "required": ["min_ms", "max_ms", "mean_ms", "p50_ms", "p90_ms", "p95_ms", "p99_ms"],
+      "properties": {"min_ms": {"type": "number", "minimum": 0}, "max_ms": {"type": "number", "minimum": 0}, "mean_ms": {"type": "number", "minimum": 0}, "p50_ms": {"type": "number", "minimum": 0}, "p90_ms": {"type": "number", "minimum": 0}, "p95_ms": {"type": "number", "minimum": 0}, "p99_ms": {"type": "number", "minimum": 0}}
+    },
+    "latency": {"type": "object", "additionalProperties": false, "required": ["all_completed", "expected_success"], "properties": {"all_completed": {"$ref": "#/definitions/percentiles"}, "expected_success": {"$ref": "#/definitions/percentiles"}}},
+    "headerSample": {"type": "object", "additionalProperties": false, "properties": {"limit": {"type": "string"}, "remaining": {"type": "string"}, "reset": {"type": "string"}, "policy": {"type": "string"}}},
+    "headerConsistency": {"type": "object", "additionalProperties": false, "required": ["observed_count", "parse_error_count", "all_parsed_agree"], "properties": {"observed_count": {"type": "integer", "minimum": 0}, "parse_error_count": {"type": "integer", "minimum": 0}, "all_parsed_agree": {"type": "boolean"}, "samples": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 128}}}},
+    "rateLimits": {"type": "object", "additionalProperties": false, "required": ["observed_429_count"], "properties": {"observed_429_count": {"type": "integer", "minimum": 0}, "retry_after_samples": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 128}}, "rate_limit_headers": {"type": "array", "maxItems": 10, "items": {"$ref": "#/definitions/headerSample"}}, "header_consistency": {"type": "object", "additionalProperties": {"$ref": "#/definitions/headerConsistency"}}}},
+    "generatorHealth": {"type": "object", "additionalProperties": false, "required": ["cpu_max_percent", "goroutines_peak", "scheduler_lag_max_ms"], "properties": {"cpu_available": {"type": "boolean"}, "cpu_max_percent": {"type": "number"}, "goroutines_peak": {"type": "integer", "minimum": 0}, "scheduler_lag_max_ms": {"type": "number", "minimum": 0}, "saturation_warnings": {"type": "array", "items": {"type": "string"}}}},
+    "auth": {"type": "object", "additionalProperties": false, "required": ["auth_mode", "token_count", "cookie_jar_enabled"], "properties": {"auth_mode": {"type": "string"}, "token_count": {"type": "integer", "minimum": 0}, "cookie_jar_enabled": {"type": "boolean"}}},
+    "threshold": {"type": "object", "additionalProperties": false, "required": ["expression", "target", "observed", "passed"], "properties": {"expression": {"type": "string"}, "target": {"type": "string"}, "observed": {"type": "string"}, "passed": {"type": "boolean"}}},
+    "segment": {"type": "object", "additionalProperties": false, "required": ["index", "name", "stage", "start_offset_ms", "end_offset_ms", "duration_ms", "rate", "target_rps", "included_measured"], "properties": {"index": {"type": "integer", "minimum": 0}, "name": {"type": "string"}, "stage": {"enum": ["warmup", "measured", "cooldown"]}, "start_offset_ms": {"type": "integer", "minimum": 0}, "end_offset_ms": {"type": "integer", "minimum": 0}, "duration_ms": {"type": "integer", "minimum": 0}, "rate": {"type": "number", "exclusiveMinimum": 0}, "target_rps": {"type": "number", "exclusiveMinimum": 0}, "included_measured": {"type": "boolean"}}},
+    "metricsSummary": {"type": "object", "additionalProperties": false, "required": ["request_counts", "outcomes", "status_codes", "latency", "rate_limits", "achieved_start_rate", "completed_throughput", "error_rate", "rate_limited_rate"], "properties": {"request_counts": {"$ref": "#/definitions/requestCounts"}, "outcomes": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}, "status_codes": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}, "latency": {"$ref": "#/definitions/latency"}, "rate_limits": {"$ref": "#/definitions/rateLimits"}, "achieved_start_rate": {"type": "number", "minimum": 0}, "completed_throughput": {"type": "number", "minimum": 0}, "error_rate": {"type": "number", "minimum": 0}, "rate_limited_rate": {"type": "number", "minimum": 0}}},
+    "calibration": {"type": "object", "additionalProperties": false, "required": ["target_rps", "achieved_start_rate", "completed_throughput", "achieved_target_ratio", "dropped_count", "dropped_rate", "scheduler_lag_max_ms", "reliable"], "properties": {"target_rps": {"type": "number", "minimum": 0}, "achieved_start_rate": {"type": "number", "minimum": 0}, "completed_throughput": {"type": "number", "minimum": 0}, "achieved_target_ratio": {"type": "number", "minimum": 0}, "dropped_count": {"type": "integer", "minimum": 0}, "dropped_rate": {"type": "number", "minimum": 0}, "scheduler_lag_max_ms": {"type": "number", "minimum": 0}, "reliable": {"type": "boolean"}, "warnings": {"type": "array", "items": {"type": "string"}}}},
+    "segmentReport": {"type": "object", "additionalProperties": false, "required": ["segment", "metrics", "calibration"], "properties": {"segment": {"$ref": "#/definitions/segment"}, "metrics": {"$ref": "#/definitions/metricsSummary"}, "calibration": {"$ref": "#/definitions/calibration"}}},
+    "firstThrottle": {"type": "object", "additionalProperties": false, "required": ["segment_index", "segment_name", "stage", "target_rps", "planned_offset_ms"], "properties": {"segment_index": {"type": "integer", "minimum": 0}, "segment_name": {"type": "string"}, "stage": {"type": "string"}, "target_rps": {"type": "number", "minimum": 0}, "planned_offset_ms": {"type": "integer", "minimum": 0}}}
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,37 +14,30 @@ import (
 	"github.com/charleszardd/daegsa/internal/executor"
 	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/plan"
+	"github.com/charleszardd/daegsa/internal/profile"
 )
 
 var (
-	// ErrInvalidRate indicates an open workload configuration with rate <= 0.
-	ErrInvalidRate = errors.New("open workload requires rate > 0")
-
-	// ErrInvalidTimeUnit indicates an open workload configuration with time_unit <= 0.
-	ErrInvalidTimeUnit = errors.New("open workload requires time_unit > 0")
-
-	// ErrInvalidMaxInFlight indicates an open workload configuration with max_in_flight <= 0.
+	ErrInvalidRate        = errors.New("open workload requires rate > 0")
+	ErrInvalidTimeUnit    = errors.New("open workload requires time_unit > 0")
 	ErrInvalidMaxInFlight = errors.New("open workload requires max_in_flight > 0")
 )
 
 const (
-	// dispatcherWorkerID is the dedicated worker ID for scheduler-level planned/dropped accounting.
-	dispatcherWorkerID = -1
-
-	// warningMaxInFlightReached is emitted when max_in_flight capacity is exceeded.
+	dispatcherWorkerID        = -1
 	warningMaxInFlightReached = "max_in_flight reached, dropped requests"
-
-	// warningTargetDegradation is emitted when drops occur due to target slow-down or low concurrency ceiling.
-	warningTargetDegradation = "target degradation or low max_in_flight caused dropped requests"
+	warningTargetDegradation  = "target degradation or low max_in_flight caused dropped requests"
+	defaultOpenGracefulStop   = 5 * time.Second
 )
 
 type dispatchJob struct {
-	ctx          context.Context
-	intendedTime time.Time
-	actualTime   time.Time
+	ctx             context.Context
+	intendedTime    time.Time
+	actualTime      time.Time
+	segmentIndex    int
+	plannedOffsetNS int64
 }
 
-// OpenScheduler coordinates open arrival-rate workload generation with precision pacing (§2, §4, §7).
 type OpenScheduler struct {
 	plan              *plan.Plan
 	executor          *executor.HTTPExecutor
@@ -54,10 +48,10 @@ type OpenScheduler struct {
 	peakInFlight      atomic.Int64
 	dispatcherMetrics *metrics.WorkerMetrics
 	workerPool        []*metrics.WorkerMetrics
+	segments          []profile.Segment
 }
 
-// NewOpenScheduler constructs and validates an OpenScheduler for the given plan and executor (§4, §7).
-func NewOpenScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clock) (*OpenScheduler, error) {
+func NewOpenScheduler(p *plan.Plan, exec *executor.HTTPExecutor, schedulerClock clock.Clock) (*OpenScheduler, error) {
 	if p == nil {
 		return nil, ErrInvalidPlan
 	}
@@ -66,9 +60,6 @@ func NewOpenScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clock
 	}
 	if p.Model != core.WorkloadModelOpen {
 		return nil, fmt.Errorf("%w: got %s", ErrIncompatibleModel, p.Model)
-	}
-	if p.Rate <= 0 {
-		return nil, ErrInvalidRate
 	}
 	if p.TimeUnit <= 0 {
 		return nil, ErrInvalidTimeUnit
@@ -79,236 +70,251 @@ func NewOpenScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clock
 	if p.Duration <= 0 {
 		return nil, ErrZeroDuration
 	}
-
-	if clk == nil {
-		clk = clock.NewRealClock()
+	segments := append([]profile.Segment(nil), p.CompiledSegments...)
+	if len(segments) == 0 {
+		if p.Rate <= 0 {
+			return nil, ErrInvalidRate
+		}
+		segments = []profile.Segment{{Index: 0, Name: "measured", Stage: profile.StageMeasured, Duration: p.Duration, DurationMS: p.Duration.Milliseconds(), EndOffset: p.Duration, EndOffsetMS: p.Duration.Milliseconds(), Rate: p.Rate, TargetRPS: p.Rate / p.TimeUnit.Seconds(), IncludedMeasured: true}}
 	}
-	exec.SetClock(clk)
-
-	workerPoolSize := int(p.MaxInFlight)
-	workerPool := make([]*metrics.WorkerMetrics, workerPoolSize)
-	for i := 0; i < workerPoolSize; i++ {
-		workerPool[i] = metrics.NewWorkerMetrics(i)
+	if schedulerClock == nil {
+		schedulerClock = clock.NewRealClock()
 	}
-
-	return &OpenScheduler{
-		plan:              p,
-		executor:          exec,
-		clock:             clk,
-		healthSampler:     metrics.NewGeneratorHealthSampler(clk),
-		stateMachine:      core.NewLifecycleStateMachine(),
-		dispatcherMetrics: metrics.NewWorkerMetrics(dispatcherWorkerID),
-		workerPool:        workerPool,
-	}, nil
+	exec.SetClock(schedulerClock)
+	workers := make([]*metrics.WorkerMetrics, int(p.MaxInFlight))
+	for workerID := range workers {
+		workers[workerID] = metrics.NewWorkerMetrics(workerID)
+	}
+	return &OpenScheduler{plan: p, executor: exec, clock: schedulerClock, healthSampler: metrics.NewGeneratorHealthSampler(schedulerClock), stateMachine: core.NewLifecycleStateMachine(), dispatcherMetrics: metrics.NewWorkerMetrics(dispatcherWorkerID), workerPool: workers, segments: segments}, nil
 }
 
-// InFlight returns the number of requests currently actively executing (§9).
-func (s *OpenScheduler) InFlight() int64 {
-	return s.inFlightCount.Load()
-}
+func (s *OpenScheduler) InFlight() int64                     { return s.inFlightCount.Load() }
+func (s *OpenScheduler) PeakInFlight() int64                 { return s.peakInFlight.Load() }
+func (s *OpenScheduler) LifecycleState() core.LifecycleState { return s.stateMachine.Current() }
 
-// PeakInFlight returns the peak concurrent in-flight requests observed (§9).
-func (s *OpenScheduler) PeakInFlight() int64 {
-	return s.peakInFlight.Load()
-}
-
-// LifecycleState returns the current execution state of the scheduler (§7).
-func (s *OpenScheduler) LifecycleState() core.LifecycleState {
-	return s.stateMachine.Current()
-}
-
-// Run executes the open arrival-rate workload lifecycle: pacing dispatches, enforcing max_in_flight drops,
-// tracking scheduler lag, preventing catch-up bursts, draining workers gracefully, and returning aggregated metrics (§7).
 func (s *OpenScheduler) Run(ctx context.Context) (*metrics.AggregatedMetrics, *metrics.GeneratorHealth, error) {
-	if err := s.stateMachine.TransitionTo(core.StateRunning); err != nil {
+	if err := s.enterStage(s.segments[0].Stage); err != nil {
 		return nil, nil, fmt.Errorf("failed to start scheduler lifecycle: %w", err)
 	}
-
 	s.healthSampler.Start()
 	defer s.healthSampler.Stop()
 
 	startTime := s.clock.Now()
-	endTime := startTime.Add(s.plan.Duration)
-	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	workerContext, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
-
-	workerPoolSize := len(s.workerPool)
-	dispatchChan := make(chan *dispatchJob, workerPoolSize)
-	var wg sync.WaitGroup
-
-	// Launch worker pool
-	for i := 0; i < workerPoolSize; i++ {
-		wg.Add(1)
-		go s.runWorker(workerCtx, i, s.workerPool[i], dispatchChan, &wg)
+	dispatchChannel := make(chan *dispatchJob, len(s.workerPool))
+	segmentCollector := metrics.NewSegmentCollector(len(s.segments))
+	segmentDispatcher := make([]*metrics.WorkerMetrics, len(s.segments))
+	for index := range segmentDispatcher {
+		segmentDispatcher[index] = metrics.NewWorkerMetrics(dispatcherWorkerID)
 	}
 
-	interval := time.Duration(float64(s.plan.TimeUnit) / s.plan.Rate)
-	nextTargetTick := startTime
-	var hardCanceled bool
+	var workers sync.WaitGroup
+	for workerID, workerMetrics := range s.workerPool {
+		workers.Add(1)
+		go s.runWorker(workerContext, workerID, workerMetrics, dispatchChannel, segmentCollector, startTime, &workers)
+	}
 
-	// Arrival pacing loop
-	for {
-		now := s.clock.Now()
-		if !now.Before(endTime) {
-			break
+	hardCanceled := false
+	previousStage := s.segments[0].Stage
+	for _, segment := range s.segments {
+		if segment.Stage != previousStage {
+			if err := s.enterStage(segment.Stage); err != nil {
+				cancelWorkers()
+				close(dispatchChannel)
+				workers.Wait()
+				return nil, nil, err
+			}
+			previousStage = segment.Stage
 		}
-		if ctx.Err() != nil {
+		if s.scheduleSegment(ctx, workerContext, startTime, segment, dispatchChannel, segmentDispatcher[segment.Index]) {
 			hardCanceled = true
 			break
 		}
-
-		waitDur := nextTargetTick.Sub(now)
-		if waitDur > 0 {
-			timer := s.clock.NewTimer(waitDur)
-			select {
-			case <-timer.C():
-			case <-ctx.Done():
-				timer.Stop()
-				hardCanceled = true
-			}
-			timer.Stop()
-			if hardCanceled || ctx.Err() != nil {
-				hardCanceled = true
-				break
-			}
-		}
-
-		actualTime := s.clock.Now()
-		if !actualTime.Before(endTime) {
-			break
-		}
-
-		intendedTime := nextTargetTick
-		lag := actualTime.Sub(intendedTime)
-		if lag > 0 {
-			s.healthSampler.RecordSchedulerLag(lag)
-		}
-
-		// Anti-catch-up burst progression: if lag > interval, advance next target tick from actualTime
-		if lag > interval {
-			nextTargetTick = actualTime.Add(interval)
-		} else {
-			nextTargetTick = nextTargetTick.Add(interval)
-		}
-
-		// Account for planned tick
-		s.dispatcherMetrics.Planned++
-
-		// Strict max_in_flight limit enforcement: atomic concurrency tracking
-		currentInFlight := s.inFlightCount.Load()
-		if currentInFlight >= s.plan.MaxInFlight {
-			s.dispatcherMetrics.Dropped++
-			s.dispatcherMetrics.Outcomes[core.OutcomeDropped]++
-			s.healthSampler.AddWarning(warningMaxInFlightReached)
-			continue
-		}
-
-		s.dispatcherMetrics.Scheduled++
-		s.inFlightCount.Add(1)
-		for {
-			peak := s.peakInFlight.Load()
-			cur := s.inFlightCount.Load()
-			if cur <= peak || s.peakInFlight.CompareAndSwap(peak, cur) {
-				break
-			}
-		}
-
-		dispatchChan <- &dispatchJob{
-			ctx:          workerCtx,
-			intendedTime: intendedTime,
-			actualTime:   actualTime,
-		}
 	}
-
-	// Stop scheduling new requests
-	close(dispatchChan)
-
-	// Transition lifecycle state
+	close(dispatchChannel)
 	if hardCanceled {
 		_ = s.stateMachine.TransitionTo(core.StateCanceled)
 	} else {
 		_ = s.stateMachine.TransitionTo(core.StateGracefulStop)
 	}
 
-	// Track worker completion
 	workersDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(workersDone)
-	}()
-
-	// Graceful drain handling
-	gracefulTimeout := s.plan.GracefulStop
-	if gracefulTimeout <= 0 {
-		gracefulTimeout = 5 * time.Second
+	go func() { workers.Wait(); close(workersDone) }()
+	gracefulStop := s.plan.GracefulStop
+	if gracefulStop <= 0 {
+		gracefulStop = defaultOpenGracefulStop
 	}
-	graceTimer := s.clock.NewTimer(gracefulTimeout)
+	graceTimer := s.clock.NewTimer(gracefulStop)
 	defer graceTimer.Stop()
-
 	if hardCanceled {
 		cancelWorkers()
 		<-workersDone
 	} else {
 		select {
 		case <-workersDone:
-			// Clean drain within graceful stop window
 		case <-graceTimer.C():
-			// Graceful stop timeout expired -> force cancel remaining in-flight requests
 			cancelWorkers()
 			<-workersDone
 		case <-ctx.Done():
-			// Hard cancellation while draining
 			cancelWorkers()
 			<-workersDone
 			_ = s.stateMachine.TransitionTo(core.StateCanceled)
 		}
 	}
-
 	_ = s.stateMachine.TransitionTo(core.StateCompleted)
 
-	// Metrics finalization and aggregation
 	elapsed := s.clock.Since(startTime)
-	allWorkers := make([]*metrics.WorkerMetrics, 0, len(s.workerPool)+1)
-	allWorkers = append(allWorkers, s.dispatcherMetrics)
-	allWorkers = append(allWorkers, s.workerPool...)
-
-	agg, err := metrics.MergeWorkers(allWorkers, elapsed)
+	allWorkers := append([]*metrics.WorkerMetrics{s.dispatcherMetrics}, s.workerPool...)
+	aggregate, err := metrics.MergeWorkers(allWorkers, elapsed)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to merge worker metrics: %w", err)
 	}
+	workerSegments, err := segmentCollector.Snapshots()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to merge segment metrics: %w", err)
+	}
 
+	segmentResults := make([]metrics.SegmentMetrics, len(s.segments))
+	measuredAggregates := make([]*metrics.AggregatedMetrics, 0, len(s.segments))
+	var measuredDuration time.Duration
+	for index, segment := range s.segments {
+		segmentAggregate, mergeErr := metrics.MergeWorkers([]*metrics.WorkerMetrics{segmentDispatcher[index], workerSegments[index]}, segment.Duration)
+		if mergeErr != nil {
+			return nil, nil, mergeErr
+		}
+		segmentResults[index] = metrics.SegmentMetrics{Segment: segment, Metrics: segmentAggregate, Calibration: metrics.BuildCalibration(segment.TargetRPS, segmentAggregate)}
+		if segment.IncludedMeasured {
+			measuredAggregates = append(measuredAggregates, segmentAggregate)
+			measuredDuration += segment.Duration
+		}
+	}
+	measured, err := metrics.MergeAggregates(measuredAggregates, measuredDuration)
+	if err != nil {
+		return nil, nil, err
+	}
+	aggregate.Segments = segmentResults
+	aggregate.Measured = measured
 	if s.dispatcherMetrics.Dropped > 0 {
 		s.healthSampler.AddWarning(warningTargetDegradation)
 	}
-
 	health := s.healthSampler.Collect()
-	return agg, &health, nil
+	return aggregate, &health, nil
 }
 
-func (s *OpenScheduler) runWorker(
-	ctx context.Context,
-	workerID int,
-	wm *metrics.WorkerMetrics,
-	dispatchChan <-chan *dispatchJob,
-	wg *sync.WaitGroup,
-) {
-	defer wg.Done()
-
-	for job := range dispatchChan {
-		wm.Started++
-
-		res, err := s.executor.ExecuteRequest(job.ctx, workerID)
-		s.inFlightCount.Add(-1)
-
-		if res != nil {
-			if res.Outcome == core.OutcomeCanceled {
-				wm.Canceled++
-			} else {
-				wm.Completed++
-			}
-			wm.RecordResult(res)
-		} else if err != nil {
-			wm.Canceled++
+func (s *OpenScheduler) scheduleSegment(ctx, workerContext context.Context, startTime time.Time, segment profile.Segment, jobs chan<- *dispatchJob, dispatcher *metrics.WorkerMetrics) bool {
+	segmentStart := startTime.Add(segment.StartOffset)
+	segmentEnd := startTime.Add(segment.EndOffset)
+	interval := time.Duration(float64(s.plan.TimeUnit) / segment.Rate)
+	nextTargetTick := segmentStart
+	for {
+		now := s.clock.Now()
+		if !now.Before(segmentEnd) {
+			return false
 		}
+		if ctx.Err() != nil {
+			return true
+		}
+		if waitDuration := nextTargetTick.Sub(now); waitDuration > 0 {
+			timer := s.clock.NewTimer(waitDuration)
+			select {
+			case <-timer.C():
+			case <-ctx.Done():
+				timer.Stop()
+				return true
+			}
+			timer.Stop()
+		}
+		actualTime := s.clock.Now()
+		if !actualTime.Before(segmentEnd) {
+			return false
+		}
+		intendedTime := nextTargetTick
+		lag := actualTime.Sub(intendedTime)
+		if lag > 0 {
+			s.healthSampler.RecordSchedulerLag(lag)
+			lagMS := float64(lag.Microseconds()) / 1000
+			if lagMS > dispatcher.SchedulerLagMaxMS {
+				dispatcher.SchedulerLagMaxMS = lagMS
+			}
+		}
+		if lag > interval {
+			nextTargetTick = actualTime.Add(interval)
+		} else {
+			nextTargetTick = nextTargetTick.Add(interval)
+		}
+		s.dispatcherMetrics.Planned++
+		dispatcher.Planned++
+		if s.inFlightCount.Load() >= s.plan.MaxInFlight {
+			s.dispatcherMetrics.Dropped++
+			s.dispatcherMetrics.Outcomes[core.OutcomeDropped]++
+			dispatcher.Dropped++
+			dispatcher.Outcomes[core.OutcomeDropped]++
+			s.healthSampler.AddWarning(warningMaxInFlightReached)
+			continue
+		}
+		s.dispatcherMetrics.Scheduled++
+		dispatcher.Scheduled++
+		s.inFlightCount.Add(1)
+		for {
+			peak, current := s.peakInFlight.Load(), s.inFlightCount.Load()
+			if current <= peak || s.peakInFlight.CompareAndSwap(peak, current) {
+				break
+			}
+		}
+		jobs <- &dispatchJob{ctx: workerContext, intendedTime: intendedTime, actualTime: actualTime, segmentIndex: segment.Index, plannedOffsetNS: intendedTime.Sub(startTime).Nanoseconds()}
+	}
+}
+
+func (s *OpenScheduler) runWorker(ctx context.Context, workerID int, overall *metrics.WorkerMetrics, jobs <-chan *dispatchJob, collector *metrics.SegmentCollector, startTime time.Time, workers *sync.WaitGroup) {
+	defer workers.Done()
+	currentSegment := -1
+	var current *metrics.WorkerMetrics
+	flush := func() {
+		if current != nil {
+			collector.Flush(currentSegment, current)
+		}
+	}
+	defer flush()
+	for job := range jobs {
+		if job.segmentIndex != currentSegment {
+			flush()
+			currentSegment = job.segmentIndex
+			current = metrics.NewWorkerMetrics(workerID)
+		}
+		overall.Started++
+		current.Started++
+		result, executionErr := s.executor.ExecuteRequest(job.ctx, workerID)
+		s.inFlightCount.Add(-1)
+		if result != nil {
+			if result.Outcome == core.OutcomeCanceled {
+				overall.Canceled++
+				current.Canceled++
+			} else {
+				overall.Completed++
+				current.Completed++
+			}
+			overall.RecordResult(result)
+			current.RecordResult(result)
+			if result.StatusCode == http.StatusTooManyRequests && (current.FirstThrottleOffsetNS < 0 || job.plannedOffsetNS < current.FirstThrottleOffsetNS) {
+				current.FirstThrottleOffsetNS = job.plannedOffsetNS
+			}
+		} else if executionErr != nil {
+			overall.Canceled++
+			current.Canceled++
+		}
+	}
+}
+
+func (s *OpenScheduler) enterStage(stage string) error {
+	switch stage {
+	case profile.StageWarmup:
+		return s.stateMachine.TransitionTo(core.StateWarmup)
+	case profile.StageMeasured:
+		return s.stateMachine.TransitionTo(core.StateRunning)
+	case profile.StageCooldown:
+		return s.stateMachine.TransitionTo(core.StateCooldown)
+	default:
+		return fmt.Errorf("unknown profile stage %q", stage)
 	}
 }

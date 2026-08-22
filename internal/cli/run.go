@@ -66,6 +66,11 @@ func newRunCmd() *cobra.Command {
 			endTime := time.Now().UTC()
 			incomplete := (runErr != nil) || (cmd.Context().Err() != nil)
 
+			evaluationAggregate := agg
+			if agg != nil && agg.Measured != nil {
+				evaluationAggregate = agg.Measured
+			}
+
 			// Threshold evaluation (§10)
 			var thresholdResults []report.ThresholdResult
 			allThresholdsPassed := true
@@ -75,7 +80,7 @@ func newRunCmd() *cobra.Command {
 				var evalErr error
 				evalResults, allThresholdsPassed, evalErr = threshold.Evaluate(
 					p.Thresholds,
-					agg.ToThresholdSnapshot(),
+					evaluationAggregate.ToThresholdSnapshot(),
 					p.ToEvaluationContext(),
 				)
 				if evalErr != nil {
@@ -116,15 +121,15 @@ func newRunCmd() *cobra.Command {
 			}
 
 			// Default pass/fail handling when no thresholds configured (§10)
-			if rep.RequestCounts.Completed > 0 {
-				successCount := rep.Outcomes[core.OutcomeSuccess]
+			if evaluationAggregate != nil && evaluationAggregate.RequestCounts.Completed > 0 {
+				successCount := evaluationAggregate.Outcomes[core.OutcomeSuccess]
 				if p.Treat429AsExpected {
-					successCount += rep.Outcomes[core.OutcomeRateLimited]
+					successCount += evaluationAggregate.Outcomes[core.OutcomeRateLimited]
 				}
-				if successCount < rep.RequestCounts.Completed {
+				if successCount < evaluationAggregate.RequestCounts.Completed {
 					return &CLIExitError{
 						Code: core.ExitCodeThresholdFailure,
-						Err:  fmt.Errorf("test completed with %d unexpected errors out of %d requests", rep.RequestCounts.Completed-successCount, rep.RequestCounts.Completed),
+						Err:  fmt.Errorf("test completed with %d unexpected errors out of %d requests", evaluationAggregate.RequestCounts.Completed-successCount, evaluationAggregate.RequestCounts.Completed),
 					}
 				}
 			}

@@ -40,11 +40,12 @@ func (e *CLIExitError) ExitCode() core.ExitCode {
 // DetermineExitCode maps errors deterministically to canonical DAEGSA process exit codes (§10).
 //
 // Exit Codes:
-//   0: PASS (All tests/validation passed)
-//   1: FAIL_THRESHOLDS (Executed, but thresholds or expected status failed)
-//   2: VALIDATION_FAILURE (CLI usage, syntax, missing env, schema, or invariant failure)
-//   3: RUNTIME_FAILURE (Tool or runtime crash, dial init failure)
-//   4: SAFETY_REFUSAL (Host allowlist, destructive method, or hard ceiling refusal)
+//
+//	0: PASS (All tests/validation passed)
+//	1: FAIL_THRESHOLDS (Executed, but thresholds or expected status failed)
+//	2: VALIDATION_FAILURE (CLI usage, syntax, missing env, schema, or invariant failure)
+//	3: RUNTIME_FAILURE (Tool or runtime crash, dial init failure)
+//	4: SAFETY_REFUSAL (Host allowlist, destructive method, or hard ceiling refusal)
 func DetermineExitCode(err error) core.ExitCode {
 	if err == nil {
 		return core.ExitCodeSuccess
