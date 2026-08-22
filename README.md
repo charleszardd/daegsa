@@ -1,6 +1,20 @@
 # DAEGSA
 
-DAEGSA is a deterministic Go CLI for REST API load, capacity, stress, spike, soak, and rate-limit testing. It keeps open arrival-rate traffic distinct from closed virtual-user traffic and reports generator limitations instead of presenting them as server capacity.
+**REST API Load, Capacity, and Rate-Limit Testing CLI**
+
+## What is DAEGSA?
+
+**DAEGSA** is an opinionated, deterministic Go CLI for REST API load, capacity, stress, spike, soak, authenticated endpoint, and rate-limit testing. It mathematically decouples open arrival-rate traffic from closed virtual-user traffic, enforces strict safety allowlists, and reports generator limitations instead of presenting them as server capacity.
+
+### Name Meaning & Origin
+
+The name **DAEGSA** is derived from a blend of concepts representing traffic load and performance cost:
+
+- **Daega / 대가 (代價/대가)**: Korean for *price*, *cost*, or *compensation*.
+- **Dagsa**: Cebuano/Bisaya for an *influx*, *surge*, or *a large number arriving*.
+- **-SA**: Inspired by the suffix of *dagsa* and its crowd/influx connotation.
+
+> **Core Concept**: *Measuring the performance cost of a large influx of API traffic.*
 
 ## Quick Start
 
@@ -30,12 +44,15 @@ daegsa compare baseline.json candidate.json
 ## Key Capabilities
 
 ### 1. Workload Models & Arrival Pacing
+
 - **Open Arrival-Rate (`load.model: open`)**: True rate-driven arrival pacing immune to coordinated omission. Enforces `max_in_flight` bounds and tracks dropped work explicitly without runaway catch-up bursts.
 - **Closed VU Loops (`load.model: closed`)**: Deterministic concurrency with user think time pacing and isolated per-VU cookie jars.
 - **Profile Stepped Ramps**: Dynamic rate step profiles with warm-up/cool-down segment metrics.
 
 ### 2. Multi-Step Scenarios
+
 DAEGSA supports stateful multi-step workflow scenarios under closed workloads:
+
 - **Dynamic Variable Extraction & Substitution**: Extract tokens, IDs, and headers from JSON, JSONPath (`$.token`, `items[0].id`), response headers, cookies, or regex capture groups, and substitute them dynamically into subsequent step URLs, headers, and request bodies via `${var_name}` (escaped as `$${LITERAL}`).
 - **Strict Per-VU Isolation**: Each virtual user executes in its own isolated memory state and cookie jar.
 - **Configurable Failure Policies**: Per-step failure behavior (`on_failure: stop`, `on_failure: abort_vu`, or `on_failure: continue`).
@@ -44,10 +61,12 @@ DAEGSA supports stateful multi-step workflow scenarios under closed workloads:
 See [examples/multi-step-scenario.yaml](examples/multi-step-scenario.yaml) for an example scenario.
 
 ### 3. Generator Self-Diagnostics & Automated Self-Tests
+
 - **`daegsa doctor`**: Diagnoses timer precision, loopback/local DNS, TLS cipher suites and root CA cert pool, socket/FD headroom, CPU cores, and memory allocation with PASS/WARN/FAIL indicators and actionable advice.
 - **`daegsa self-test`**: In-process end-to-end verification across closed-model loops, open arrival pacing, multi-step scenario state chaining, and threshold rule evaluation against an embedded HTTP target.
 
 ### 4. Standalone Multi-Platform Distribution
+
 - Pure standalone binaries with `-trimpath` reproducible builds.
 - Pre-built packages for Windows AMD64, Linux AMD64, macOS AMD64/ARM64 in `dist/`.
 - Verifiable SHA-256 checksums (`dist/SHA256SUMS`) and CycloneDX SBOM (`dist/sbom-cyclonedx.json`).
