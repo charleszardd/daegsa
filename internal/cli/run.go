@@ -51,21 +51,14 @@ func newRunCmd() *cobra.Command {
 					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
 				}
 				agg, health, runErr = sched.Run(cmd.Context())
-			} else {
-				// Single-request execution for open model baseline (until open arrival scheduler in Phase 3)
-				res, execErr := exec.ExecuteRequest(cmd.Context())
-				if execErr != nil {
-					runErr = execErr
-				} else {
-					wm := metrics.NewWorkerMetrics(0)
-					wm.Planned = 1
-					wm.Started = 1
-					wm.Completed = 1
-					wm.RecordResult(res)
-					agg, _ = metrics.MergeWorkers([]*metrics.WorkerMetrics{wm}, res.Latency)
-					h := metrics.NewGeneratorHealthSampler(clock.NewRealClock()).Collect()
-					health = &h
+			} else if p.Model == core.WorkloadModelOpen {
+				sched, err := scheduler.NewOpenScheduler(p, exec, clock.NewRealClock())
+				if err != nil {
+					return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: err}
 				}
+				agg, health, runErr = sched.Run(cmd.Context())
+			} else {
+				return &CLIExitError{Code: core.ExitCodeRuntimeFailure, Err: fmt.Errorf("unsupported workload model: %s", p.Model)}
 			}
 
 			endTime := time.Now().UTC()
