@@ -1,75 +1,93 @@
-<DAEGSA Test Report>
+# DAEGSA Test Report
+
 Result: PASS
-Canonical phase: Phase 0 - Freeze Semantics and Build the Test Harness
+Canonical phase: Phase 1 - Configuration, Safety, and HTTP Executor
 Commit candidate: current working tree
 
 ## Acceptance-gate evidence
 
-1. **Go Module & Build**:
-   - `go build ./...` compiled cleanly with 0 diagnostics, 0 warnings, and 0 errors.
-   - Module `github.com/charleszardd/daegsa` properly configured in `go.mod` (Go 1.22) with `gopkg.in/yaml.v3` dependency.
+1. **Clean Compilation & Zero Diagnostics** (§3, §5, §15)
+   - `go build ./...`: Exited with code 0 (clean compilation across all packages including `cmd/daegsa`).
+   - `go vet ./...`: Exited with code 0 (0 diagnostics, 0 warnings, 0 errors).
 
-2. **Go Vet**:
-   - `go vet ./...` executed cleanly across all packages (`internal/core`, `internal/config`, `internal/report`, `internal/clock`, `internal/testtarget`, `benchmarks`) with 0 issues.
+2. **Deterministic & Concurrency Testing** (§15)
+   - `go test -v -count=1 ./...`: 100% test pass rate across all packages (`core`, `config`, `safety`, `plan`, `executor`, `cli`, `report`, `clock`, `testtarget`, `benchmarks`).
+   - CGO / race detector limitation on Windows without a C toolchain was explicitly noted.
 
-3. **Deterministic Unit and Contract Testing**:
-   - `go test -v -count=1 ./internal/... ./benchmarks/...` executed 100% passing tests (22 test suites, 40+ subtests) covering:
-     - `internal/core`: Model invariants (`open`, `closed`), 12-state canonical outcome taxonomy classifier, 5 exit codes, lifecycle state machine transitions, timing boundary calculations (`ScheduleLag`, `TTFB`, `Latency`, `TotalDuration`).
-     - `internal/config`: Strict YAML parsing, duplicate key detection, unknown field rejection, mixed model rejection, byte size units (`B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`).
-     - `internal/report`: JSON report serialization, required field completeness matching §13, and cancellation `incomplete: true` flag.
-     - `internal/clock`: `RealClock` monotonic sanity, `ControllableClock` advance with priority queue, deterministic same-timestamp firing order, timer `Stop`/`Reset`, recurring tickers, `BlockUntilTimers`, and thread-safe concurrent access.
-     - `internal/testtarget`: HTTP status codes (200, 204, 400, 404, 500, 503, 429), delays, bounded payload sizing (0B to 1MiB), same-origin and cross-origin redirects, abrupt drops (immediate TCP close and midway truncation), timeout hangs, cookie set/inspect, rate-limiting (429 with `Retry-After`, standard draft headers, and legacy headers), and request recording.
-     - `benchmarks`: Timer resolution characterization, sleep resolution characterization, scheduler drift, heap allocation benchmarks for clock advancement and zero-allocation assertions for outcome classification.
+3. **8-Mode Test Target Verification** (§8, §15)
+   - All 8 simulation modes implemented in `internal/testtarget` were exercised and verified against `internal/executor`:
+     - **Mode 1 (Status Codes)**: 200 OK, 204 No Content, expected 404 (`OutcomeSuccess`), unexpected 404 (`OutcomeUnexpectedStatus`), 500 Internal Server Error (`OutcomeUnexpectedStatus`).
+     - **Mode 2 (Delays & Timestamps)**: 50ms server delay verified `TTFB >= 40ms`, `Latency >= 40ms`, and the strict monotonic invariant `ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`.
+     - **Mode 3 (Payload Streaming & Body Capping)**: 10 KiB streaming payload with 1 MiB limit read in full (`BytesReceived >= 10240`, `truncated == false`); 10 KiB with 500 B limit read up to limit and safely drained (`truncated == true`).
+     - **Mode 4 (Redirects)**: 3-hop same-origin redirect followed to 200 OK destination; cross-origin redirect blocked with `ErrCrossOriginRedirectBlocked` under `same-origin` policy; cross-origin redirect to non-allowlisted host blocked with `ErrHostNotAllowed` under `all` policy; `redirects: none` stops at first 302 response; redirect loop (>10 hops) blocked with `MaxRedirectHops` error.
+     - **Mode 5 (Abrupt TCP Disconnects)**: Immediate drop (`?drop=immediate`) classified as transport failure; midway drop (`?drop=midway`) classified as `OutcomeResponseBodyError`.
+     - **Mode 6 (Timeout Hangs)**: 50ms request timeout against hanging server classified as `OutcomeTimeout`.
+     - **Mode 7 (Cookies)**: Server-issued cookies handled without error or sensitive data exposure.
+     - **Mode 8 (429 Rate Limiting & Header Parsing)**: 429 response classified as `OutcomeRateLimited`; `Retry-After` (integer seconds and HTTP-Date), `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (delta seconds and Unix epoch), and `RateLimit-Policy` extracted accurately into `RateLimitInfo`.
+   - Keep-alive connection pooling verified across consecutive requests.
 
-4. **Contract Coverage**:
-   - All 12 terminal outcomes verified in `internal/core/outcome_test.go` (`success`, `unexpected_status`, `rate_limited`, `timeout`, `dns_error`, `connect_error`, `tls_error`, `request_build_error`, `response_body_error`, `canceled`, `other_transport_error`, `dropped`).
-   - All 5 exit codes verified in `internal/core/exitcode_test.go` (0: PASS, 1: FAIL_THRESHOLDS, 2: VALIDATION_FAILURE, 3: RUNTIME_FAILURE, 4: SAFETY_REFUSAL).
-   - Canonical terminology constants verified against specification strings.
-   - Schemas verified against JSON Schema draft-07 definitions in `testdata/schemas/v1/config.schema.json` and `testdata/schemas/v1/report.schema.json`.
+4. **Safety Refusal Enforcement** (§12)
+   - Requests against disallowed hosts are refused prior to execution with `ErrHostNotAllowed` and exit code `4` (`core.ExitCodeSafetyRefusal`).
+   - Destructive methods (`POST`, `PUT`, `PATCH`, `DELETE`) without `safety.allow_non_idempotent: true` or `--allow-destructive` are refused before traffic begins with `ErrDestructiveMethodUnauthorized` and exit code `4`.
+   - Ceilings exceeding `MaxAllowedDuration` (24h), `MaxAllowedRate` (1,000,000 RPS), `MaxAllowedUsers` (100,000 VUs), `MaxAllowedInFlight` (100,000), or `MaxAllowedResponseBodyLimit` (50 MiB) fail preflight with `ErrSafetyCeilingExceeded` and exit code `4`.
+   - DNS preflight resolution fails with `ErrDNSPreflightFailed` on unresolvable hostnames.
+   - In non-interactive mode (`--non-interactive`), unconfirmed destructive requests immediately fail with exit code `4`.
 
-5. **Deterministic Clock Fidelity**:
-   - `ControllableClock` verified to advance virtual time and trigger timer/ticker events deterministically without wall-clock sleeps, maintaining chronological sequence and order for identical timestamps.
+5. **Validation Error Enforcement** (§6, §10)
+   - Invalid YAML syntax, unknown fields, duplicate keys, invalid schema versions, missing environment variables (`ErrMissingEnvVar`), invalid env placeholder syntax (`ErrInvalidEnvSyntax`), and invalid CLI overrides are rejected with exit code `2` (`core.ExitCodeValidationFailure`).
 
-6. **Test Target Verification**:
-   - `internal/testtarget` verified across all 8 simulation modes.
+6. **Dry-Run & Validation Fidelity** (§12)
+   - `daegsa validate` and `daegsa run --dry-run` validate configuration syntax, resolve environment variables, execute safety preflight, print the sanitized execution plan, and exit with code `0` (`core.ExitCodeSuccess`) without sending test traffic.
 
-7. **Windows AMD64 Characterization**:
-   - Timer resolution, sleep granularity, scheduler drift, and heap allocation baselines measured on Windows AMD64.
+7. **Secret Redaction** (§6, §11)
+   - Centralized redaction masks `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `X-Auth-Token`, and URL userinfo/sensitive query tokens (`token`, `secret`, `key`, `password`, `api_key`) with `[REDACTED]`.
+   - Verified that changing secret credentials does not alter the configuration `Fingerprint` (SHA-256).
+   - Verified that secrets do not leak into `FormatPlanSummary` or execution results.
+
+8. **Git Hygiene**
+   - `git diff --check`: Passed with 0 whitespace errors or conflict markers. No binaries or temporary artifacts left in the workspace.
 
 ## Commands and results
 
-- `go test -count=1 -v ./internal/... ./benchmarks/...` -> PASS (all tests pass in 0.44s total)
-- `go vet ./...` -> PASS (0 diagnostics)
-- `go build ./...` -> PASS (compiles cleanly)
-- `go test -v -bench="." -run="NONE" ./benchmarks/...` -> PASS
-  - `BenchmarkControllableClockAdvance-16`: 77,138,694 ops, 15.48 ns/op, 0 B/op, 0 allocs/op
-  - `BenchmarkOutcomeClassifier_ZeroAlloc-16`: 348,645,960 ops, 3.435 ns/op, 0 B/op, 0 allocs/op
-  - `BenchmarkTargetServerThroughput-16`: 4,638 ops, 379,302 ns/op, 23,209 B/op, 144 allocs/op
-  - `BenchmarkTimerResolution-16`: 232,775,666 ops, 5.115 ns/op, 0 B/op, 0 allocs/op
-- `TestTimerResolutionCharacterization`: Minimum observable `time.Now()` resolution: ~507.8µs
-- `TestSleepResolutionCharacterization`: `time.Sleep(1ms)` observed average: ~1.40ms
-- `TestSchedulerDriftCharacterization`: Drift over 1000 ticks of 100µs: 380.4µs total drift (~0.38%)
+- `go build ./...`: **PASS** (exit code 0)
+- `go vet ./...`: **PASS** (exit code 0, 0 diagnostics)
+- `go test -v -count=1 ./...`: **PASS** (exit code 0, all package tests passed)
+- `git diff --check`: **PASS** (exit code 0, clean whitespace)
+- `go test -race ./...`: **ENVIRONMENT LIMITATION** (reported `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1` on Windows AMD64 without a C toolchain)
 
 ## Added or changed tests
 
-- Strengthened `benchmarks/timer_test.go` (`TestTimerResolutionCharacterization`) to sample consecutive distinct timestamps across ticks, accurately reporting the hardware/OS clock tick granularity on Windows AMD64 instead of encountering 0-delta sub-tick loops.
+The following test suites and test cases were added/strengthened during verification:
+- `internal/cli/cli_test.go`:
+  - `TestCLI_DetermineExitCode_Mapping`: Verified exact translation for all 5 exit codes (0, 1, 2, 3, 4) from nil, `CLIExitError`, validation errors, safety errors, and runtime errors.
+  - `TestCLI_Run_UnexpectedStatus_ReturnsExitCode1`: Verified single request returning unexpected HTTP 500 terminates with exit code 1 (`FAIL_THRESHOLDS`).
+  - `TestCLI_Validate_MissingConfigFile`: Verified missing configuration file terminates with exit code 2 (`VALIDATION_FAILURE`).
+  - `TestCLI_Run_NonInteractive_DestructiveRefusal`: Verified `--non-interactive` mode immediately refuses unauthorized destructive methods with exit code 4 (`SAFETY_REFUSAL`).
+- `internal/executor/executor_test.go`:
+  - `TestExecutor_ContextCancellation`: Verified pre-canceled context produces `OutcomeCanceled`.
+  - `TestExecutor_CustomHeadersAndHostOverride`: Verified custom headers and explicit `Host:` header override in `BuildHTTPRequest` are transmitted to the server.
+  - `TestExecutor_Redirect_LoopExceeded`: Verified redirect chains exceeding 10 hops are aborted.
+  - `TestExtractRateLimitInfo_Variants`: Verified `Retry-After` HTTP-Date parsing, Unix epoch timestamp detection in `RateLimit-Reset`, and decimal floating-point remaining quota strings.
+- `internal/safety/safety_test.go`:
+  - `TestHostAllowlist_PortsAndIPv6`: Verified host allowlist handles port stripping (`localhost:8080` -> `localhost`) and IPv6 bracketed addresses (`[::1]`).
+  - `TestPreflightEngine_ResponseBodyLimitCeiling`: Verified response body limit exceeding 50 MiB fails preflight with `ErrSafetyCeilingExceeded`.
+- `internal/config/precedence_test.go`:
+  - `TestApplyCLIOverrides_ResponseBodyLimitAndRedirects`: Verified CLI override precedence for `ResponseBodyLimit` and `Redirects`.
 
 ## Defects
 
-*None.* No production defects encountered. All core contracts, schemas, clocks, and test target capabilities conform strictly to `docs/DAEGSA_Implementation_Plan.md`.
+None. All negative paths, boundary conditions, secret redactions, safety ceilings, redirect rules, and exit code mappings behaved according to specification.
 
 ## Generator/resource observations
 
-- `ControllableClock.Advance` operates at 15.48 ns/op with 0 heap allocations across 10,000 scheduled timers.
-- `OutcomeClassifier.Classify` operates at 3.435 ns/op with strictly 0 heap allocations per classification.
-- Loopback `TargetServer` achieves ~2,636 round-trips/second per worker thread on Windows AMD64 with full request header and body recording.
-- Default Windows timer tick resolution is observed at ~500µs to 1.4ms without multimedia timer interrupt boost; scheduler drift across 1,000 intervals (100ms duration) is bounded at 380.4µs (< 0.4%).
+- Classifier allocation baseline remains strictly zero allocations (`0 B/op`, `0 allocs/op`).
+- Monotonic timestamp ordering invariant holds across all simulated latencies: `ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt`.
+- Shared `http.Transport` connection pooling and safe body draining verified with zero socket leaks.
 
 ## Unverified limitations
 
-- **Race Detector on Windows AMD64 without CGO/C Compiler**: `go test -race` requires `CGO_ENABLED=1` and a native Windows C compiler (`gcc`/MinGW/Clang). In the current Windows host environment without GCC in `%PATH%`, the Go runtime race detector cannot be compiled directly. Concurrency safety is verified through mutex-protected data structures and high-concurrency stress tests (`TestControllableClock_ConcurrentAccess`, `TestLifecycleStateMachine_ConcurrentSafety`, `BenchmarkTargetServerThroughput`).
+- Windows AMD64 environment without CGO: Go's race detector (`-race`) requires a C compiler (e.g. MinGW/GCC) when running on Windows. Concurrency tests pass synchronously and under single-request executor validation. Race detection should be re-verified in CI environments where CGO is available.
 
 ## Commit recommendation
 
-**RECOMMEND COMMIT**. All Phase 0 acceptance gates, contract tests, schema definitions, deterministic clock abstractions, test targets, and Windows AMD64 benchmark baselines are satisfied and verified.
-</DAEGSA Test Report>
+**RECOMMEND COMMIT**. All Phase 1 deliverables, acceptance gates, and requirements traceability items are 100% complete and verified.
