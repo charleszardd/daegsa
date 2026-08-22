@@ -49,10 +49,31 @@ func cloneConfigSanitized(cfg *Config) *Config {
 		RateLimit: RateLimitConfig{
 			Treat429AsExpected: cfg.RateLimit.Treat429AsExpected,
 		},
+		Auth: AuthConfig{
+			Type:       cfg.Auth.Type,
+			HeaderName: cfg.Auth.HeaderName,
+			CookieJar:  cfg.Auth.CookieJar,
+		},
 		Safety: SafetyConfig{
 			AllowedHosts:       make([]string, len(cfg.Safety.AllowedHosts)),
 			AllowNonIdempotent: cfg.Safety.AllowNonIdempotent,
 		},
+	}
+
+	if cfg.Auth.Token != "" {
+		c.Auth.Token = RedactedPlaceholder
+	}
+	if cfg.Auth.Username != "" {
+		c.Auth.Username = RedactedPlaceholder
+	}
+	if cfg.Auth.Password != "" {
+		c.Auth.Password = RedactedPlaceholder
+	}
+	if len(cfg.Auth.TokenPool) > 0 {
+		c.Auth.TokenPool = make([]string, len(cfg.Auth.TokenPool))
+		for i := range cfg.Auth.TokenPool {
+			c.Auth.TokenPool[i] = RedactedPlaceholder
+		}
 	}
 
 	copy(c.Request.ExpectedStatuses, cfg.Request.ExpectedStatuses)

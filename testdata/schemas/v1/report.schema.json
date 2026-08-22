@@ -131,6 +131,16 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth_mode", "token_count", "cookie_jar_enabled"],
+      "properties": {
+        "auth_mode": { "type": "string" },
+        "token_count": { "type": "integer", "minimum": 0 },
+        "cookie_jar_enabled": { "type": "boolean" }
+      }
+    },
     "thresholds": {
       "type": "array",
       "items": {

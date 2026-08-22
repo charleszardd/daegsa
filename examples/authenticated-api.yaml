@@ -1,0 +1,37 @@
+schema_version: 1
+name: authenticated-api-load-test
+
+request:
+  url: ${TARGET_URL}/auth/bearer
+  method: GET
+  headers:
+    Accept: application/json
+  expected_statuses: [200]
+  timeout: 5s
+  response_body_limit: 1MiB
+  redirects: same-origin
+
+auth:
+  type: bearer
+  token: ${API_TOKEN}
+
+load:
+  model: closed
+  users: 10
+  duration: 10s
+  think_time: 20ms
+  graceful_stop: 2s
+
+rate_limit:
+  treat_429_as_expected: false
+
+thresholds:
+  http_error_rate: "== 0%"
+  p95: "<= 100ms"
+  completed_requests: ">= 50"
+
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+  allow_non_idempotent: false

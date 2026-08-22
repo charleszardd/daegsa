@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/auth"
+	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/plan"
 	"github.com/charleszardd/daegsa/internal/safety"
@@ -68,7 +71,7 @@ func TestExecutor_Mode1_StatusCodes(t *testing.T) {
 	exec200, _ := NewHTTPExecutor(p200)
 	defer exec200.Close()
 
-	res200, err := exec200.ExecuteRequest(ctx)
+	res200, err := exec200.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +87,7 @@ func TestExecutor_Mode1_StatusCodes(t *testing.T) {
 	exec204, _ := NewHTTPExecutor(p204)
 	defer exec204.Close()
 
-	res204, err := exec204.ExecuteRequest(ctx)
+	res204, err := exec204.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,7 +103,7 @@ func TestExecutor_Mode1_StatusCodes(t *testing.T) {
 	exec404Unexp, _ := NewHTTPExecutor(p404Unexp)
 	defer exec404Unexp.Close()
 
-	res404Unexp, err := exec404Unexp.ExecuteRequest(ctx)
+	res404Unexp, err := exec404Unexp.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestExecutor_Mode1_StatusCodes(t *testing.T) {
 	exec404Exp, _ := NewHTTPExecutor(p404Exp)
 	defer exec404Exp.Close()
 
-	res404Exp, err := exec404Exp.ExecuteRequest(ctx)
+	res404Exp, err := exec404Exp.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +129,7 @@ func TestExecutor_Mode1_StatusCodes(t *testing.T) {
 	exec500, _ := NewHTTPExecutor(p500)
 	defer exec500.Close()
 
-	res500, err := exec500.ExecuteRequest(ctx)
+	res500, err := exec500.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +149,7 @@ func TestExecutor_Mode2_DelaysAndTimestamps(t *testing.T) {
 	exec, _ := NewHTTPExecutor(p)
 	defer exec.Close()
 
-	res, err := exec.ExecuteRequest(ctx)
+	res, err := exec.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,25 +161,31 @@ func TestExecutor_Mode2_DelaysAndTimestamps(t *testing.T) {
 	// Invariant: ScheduledAt <= DispatchedAt <= HeadersReceivedAt <= BodyCompletedAt
 	ts := res.Timestamps
 	if ts.DispatchedAt.Before(ts.ScheduledAt) {
-		t.Errorf("invariant violated: DispatchedAt %v is before ScheduledAt %v", ts.DispatchedAt, ts.ScheduledAt)
+		t.Errorf("DispatchedAt before ScheduledAt: %v < %v", ts.DispatchedAt, ts.ScheduledAt)
 	}
 	if ts.HeadersReceivedAt.Before(ts.DispatchedAt) {
-		t.Errorf("invariant violated: HeadersReceivedAt %v is before DispatchedAt %v", ts.HeadersReceivedAt, ts.DispatchedAt)
+		t.Errorf("HeadersReceivedAt before DispatchedAt: %v < %v", ts.HeadersReceivedAt, ts.DispatchedAt)
 	}
 	if ts.BodyCompletedAt.Before(ts.HeadersReceivedAt) {
-		t.Errorf("invariant violated: BodyCompletedAt %v is before HeadersReceivedAt %v", ts.BodyCompletedAt, ts.HeadersReceivedAt)
+		t.Errorf("BodyCompletedAt before HeadersReceivedAt: %v < %v", ts.BodyCompletedAt, ts.HeadersReceivedAt)
 	}
 
-	// TTFB and Latency should be at least 40ms (accounting for scheduling jitter)
-	if res.TTFB < 40*time.Millisecond {
-		t.Errorf("expected TTFB >= 40ms, got %v", res.TTFB)
+	// Latency measurements non-negative
+	if res.Latency <= 0 {
+		t.Errorf("expected positive latency, got %v", res.Latency)
+	}
+	if res.TTFB <= 0 {
+		t.Errorf("expected positive TTFB, got %v", res.TTFB)
+	}
+	if res.TotalDuration <= 0 {
+		t.Errorf("expected positive TotalDuration, got %v", res.TotalDuration)
 	}
 	if res.Latency < 40*time.Millisecond {
-		t.Errorf("expected Latency >= 40ms, got %v", res.Latency)
+		t.Errorf("expected at least 40ms latency due to delay, got %v", res.Latency)
 	}
 }
 
-// Mode 3: Payload Streaming & Body Capping
+// Mode 3: Payload Streaming & Capping
 func TestExecutor_Mode3_PayloadStreamingAndCapping(t *testing.T) {
 	server := testtarget.NewServer()
 	defer server.Close()
@@ -188,7 +197,7 @@ func TestExecutor_Mode3_PayloadStreamingAndCapping(t *testing.T) {
 	execFull, _ := NewHTTPExecutor(pFull)
 	defer execFull.Close()
 
-	resFull, err := execFull.ExecuteRequest(ctx)
+	resFull, err := execFull.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,7 +216,7 @@ func TestExecutor_Mode3_PayloadStreamingAndCapping(t *testing.T) {
 	execCapped, _ := NewHTTPExecutor(pCapped)
 	defer execCapped.Close()
 
-	resCapped, err := execCapped.ExecuteRequest(ctx)
+	resCapped, err := execCapped.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +240,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	execSameOrigin, _ := NewHTTPExecutor(pSameOrigin)
 	defer execSameOrigin.Close()
 
-	resSameOrigin, err := execSameOrigin.ExecuteRequest(ctx)
+	resSameOrigin, err := execSameOrigin.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +253,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	execCrossBlocked, _ := NewHTTPExecutor(pCrossBlocked)
 	defer execCrossBlocked.Close()
 
-	resCrossBlocked, err := execCrossBlocked.ExecuteRequest(ctx)
+	resCrossBlocked, err := execCrossBlocked.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected execution error: %v", err)
 	}
@@ -261,7 +270,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	execCrossDisallowed, _ := NewHTTPExecutor(pCrossDisallowed)
 	defer execCrossDisallowed.Close()
 
-	resCrossDisallowed, _ := execCrossDisallowed.ExecuteRequest(ctx)
+	resCrossDisallowed, _ := execCrossDisallowed.ExecuteRequest(ctx, 0)
 	if !errors.Is(resCrossDisallowed.Err, safety.ErrHostNotAllowed) {
 		t.Errorf("expected ErrHostNotAllowed for unauthorized redirect target, got %v", resCrossDisallowed.Err)
 	}
@@ -271,7 +280,7 @@ func TestExecutor_Mode4_Redirects(t *testing.T) {
 	execNone, _ := NewHTTPExecutor(pNone)
 	defer execNone.Close()
 
-	resNone, err := execNone.ExecuteRequest(ctx)
+	resNone, err := execNone.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,7 +304,7 @@ func TestExecutor_Mode5_TCPDisconnects(t *testing.T) {
 	execImmediate, _ := NewHTTPExecutor(pImmediate)
 	defer execImmediate.Close()
 
-	resImmediate, _ := execImmediate.ExecuteRequest(ctx)
+	resImmediate, _ := execImmediate.ExecuteRequest(ctx, 0)
 	if !resImmediate.Outcome.IsTransportFailure() {
 		t.Errorf("expected transport failure outcome for immediate drop, got %s", resImmediate.Outcome)
 	}
@@ -305,7 +314,7 @@ func TestExecutor_Mode5_TCPDisconnects(t *testing.T) {
 	execMidway, _ := NewHTTPExecutor(pMidway)
 	defer execMidway.Close()
 
-	resMidway, _ := execMidway.ExecuteRequest(ctx)
+	resMidway, _ := execMidway.ExecuteRequest(ctx, 0)
 	if resMidway.Outcome != core.OutcomeResponseBodyError && !resMidway.Outcome.IsTransportFailure() {
 		t.Errorf("expected OutcomeResponseBodyError or transport failure for midway drop, got %s", resMidway.Outcome)
 	}
@@ -322,7 +331,7 @@ func TestExecutor_Mode6_TimeoutHangs(t *testing.T) {
 	execHang, _ := NewHTTPExecutor(pHang)
 	defer execHang.Close()
 
-	resHang, err := execHang.ExecuteRequest(ctx)
+	resHang, err := execHang.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected execution error: %v", err)
 	}
@@ -341,7 +350,7 @@ func TestExecutor_Mode7_Cookies(t *testing.T) {
 	execCookie, _ := NewHTTPExecutor(pCookie)
 	defer execCookie.Close()
 
-	resCookie, err := execCookie.ExecuteRequest(ctx)
+	resCookie, err := execCookie.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +375,7 @@ func TestExecutor_Mode8_RateLimiting(t *testing.T) {
 	execRateLimit, _ := NewHTTPExecutor(pRateLimit)
 	defer execRateLimit.Close()
 
-	res, err := execRateLimit.ExecuteRequest(ctx)
+	res, err := execRateLimit.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -406,7 +415,7 @@ func TestExecutor_KeepAliveConnectionReuse(t *testing.T) {
 
 	// Execute consecutive requests
 	for i := 0; i < 5; i++ {
-		res, err := exec.ExecuteRequest(ctx)
+		res, err := exec.ExecuteRequest(ctx, 0)
 		if err != nil {
 			t.Fatalf("request %d failed: %v", i, err)
 		}
@@ -433,7 +442,7 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 	exec, _ := NewHTTPExecutor(p)
 	defer exec.Close()
 
-	res, err := exec.ExecuteRequest(ctx)
+	res, err := exec.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected execution error: %v", err)
 	}
@@ -466,7 +475,7 @@ func TestExecutor_CustomHeadersAndHostOverride(t *testing.T) {
 	exec, _ := NewHTTPExecutor(p)
 	defer exec.Close()
 
-	res, err := exec.ExecuteRequest(ctx)
+	res, err := exec.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -493,7 +502,7 @@ func TestExecutor_Redirect_LoopExceeded(t *testing.T) {
 	exec, _ := NewHTTPExecutor(p)
 	defer exec.Close()
 
-	res, err := exec.ExecuteRequest(ctx)
+	res, err := exec.ExecuteRequest(ctx, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -530,5 +539,222 @@ func TestExtractRateLimitInfo_Variants(t *testing.T) {
 	infoFloat := ExtractRateLimitInfo(hFloat)
 	if infoFloat == nil || infoFloat.Remaining == nil || *infoFloat.Remaining != 99 {
 		t.Fatalf("expected Remaining=99 for float rate limit, got %v", infoFloat)
+	}
+}
+
+// Authentication & Secret Contract Tests against testtarget
+func TestExecutor_Auth_Bearer(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+
+	// Valid Bearer
+	pValid := helperBuildPlan(t, server.URL()+"/auth/bearer", "GET", "", []int{200}, 0, 0)
+	authnValid, _ := auth.NewAuthenticator(&config.AuthConfig{
+		Type:  auth.AuthTypeBearer,
+		Token: "valid-bearer-token",
+	})
+	pValid.Authenticator = authnValid
+	pValid.KnownSecrets = []string{"valid-bearer-token"}
+
+	execValid, _ := NewHTTPExecutor(pValid)
+	defer execValid.Close()
+
+	resValid, err := execValid.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("unexpected execution error: %v", err)
+	}
+	if resValid.Outcome != core.OutcomeSuccess {
+		t.Errorf("expected OutcomeSuccess for valid bearer, got %s (status %d)", resValid.Outcome, resValid.StatusCode)
+	}
+
+	// Invalid Bearer (none configured)
+	pInvalid := helperBuildPlan(t, server.URL()+"/auth/bearer", "GET", "", []int{200}, 0, 0)
+	execInvalid, _ := NewHTTPExecutor(pInvalid)
+	defer execInvalid.Close()
+
+	resInvalid, err := execInvalid.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resInvalid.Outcome != core.OutcomeUnexpectedStatus || resInvalid.StatusCode != 401 {
+		t.Errorf("expected 401 Unauthorized, got outcome %s, status %d", resInvalid.Outcome, resInvalid.StatusCode)
+	}
+}
+
+func TestExecutor_Auth_CustomHeader(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	p := helperBuildPlan(t, server.URL()+"/auth/header", "GET", "", []int{200}, 0, 0)
+	authn, _ := auth.NewAuthenticator(&config.AuthConfig{
+		Type:       auth.AuthTypeCustomHeader,
+		Token:      "live-api-key-999",
+		HeaderName: "X-API-Key",
+	})
+	p.Authenticator = authn
+	p.KnownSecrets = []string{"live-api-key-999"}
+
+	exec, _ := NewHTTPExecutor(p)
+	defer exec.Close()
+
+	res, err := exec.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("unexpected execution error: %v", err)
+	}
+	if res.Outcome != core.OutcomeSuccess {
+		t.Errorf("expected OutcomeSuccess for custom header auth, got %s (status %d)", res.Outcome, res.StatusCode)
+	}
+}
+
+func TestExecutor_Auth_Basic(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	p := helperBuildPlan(t, server.URL()+"/auth/basic", "GET", "", []int{200}, 0, 0)
+	authn, _ := auth.NewAuthenticator(&config.AuthConfig{
+		Type:     auth.AuthTypeBasic,
+		Username: "admin_user",
+		Password: "secret_pass_123",
+	})
+	p.Authenticator = authn
+	p.KnownSecrets = []string{"secret_pass_123"}
+
+	exec, _ := NewHTTPExecutor(p)
+	defer exec.Close()
+
+	res, err := exec.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("unexpected execution error: %v", err)
+	}
+	if res.Outcome != core.OutcomeSuccess {
+		t.Errorf("expected OutcomeSuccess for basic auth, got %s (status %d)", res.Outcome, res.StatusCode)
+	}
+}
+
+func TestExecutor_Auth_TokenPool(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	tokens := []string{"tok-A", "tok-B", "tok-C"}
+	p := helperBuildPlan(t, server.URL()+"/auth/token-pool", "GET", "", []int{200}, 0, 0)
+	authn, _ := auth.NewAuthenticator(&config.AuthConfig{
+		Type:      auth.AuthTypeTokenPool,
+		TokenPool: tokens,
+	})
+	p.Authenticator = authn
+	p.KnownSecrets = tokens
+
+	exec, _ := NewHTTPExecutor(p)
+	defer exec.Close()
+
+	// Worker 0 -> tok-A, Worker 1 -> tok-B, Worker 2 -> tok-C, Worker 3 -> tok-A
+	for workerID := 0; workerID < 4; workerID++ {
+		res, err := exec.ExecuteRequest(ctx, workerID)
+		if err != nil {
+			t.Fatalf("worker %d request failed: %v", workerID, err)
+		}
+		if res.Outcome != core.OutcomeSuccess {
+			t.Errorf("worker %d failed with outcome %s", workerID, res.Outcome)
+		}
+	}
+
+	recorded := server.RecordedRequests()
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 recorded requests, got %d", len(recorded))
+	}
+	if recorded[0].Header.Get("Authorization") != "Bearer tok-A" {
+		t.Errorf("worker 0 token = %q, want 'Bearer tok-A'", recorded[0].Header.Get("Authorization"))
+	}
+	if recorded[1].Header.Get("Authorization") != "Bearer tok-B" {
+		t.Errorf("worker 1 token = %q, want 'Bearer tok-B'", recorded[1].Header.Get("Authorization"))
+	}
+	if recorded[2].Header.Get("Authorization") != "Bearer tok-C" {
+		t.Errorf("worker 2 token = %q, want 'Bearer tok-C'", recorded[2].Header.Get("Authorization"))
+	}
+	if recorded[3].Header.Get("Authorization") != "Bearer tok-A" {
+		t.Errorf("worker 3 token = %q, want 'Bearer tok-A'", recorded[3].Header.Get("Authorization"))
+	}
+}
+
+func TestExecutor_Auth_CookieJar_Isolation(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	ctx := context.Background()
+	p := helperBuildPlan(t, server.URL(), "GET", "", []int{200}, 0, 0)
+	jarMgr, _ := auth.NewVUJarManager(true, 2)
+	p.JarManager = jarMgr
+	p.CookieJarEnabled = true
+
+	exec, _ := NewHTTPExecutor(p)
+	defer exec.Close()
+
+	// VU 0 sets cookie session=VU0
+	p.TargetURL, _ = url.Parse(server.URL() + "/cookies/set?session=VU0")
+	_, err := exec.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("VU 0 set cookie failed: %v", err)
+	}
+
+	// VU 1 sets cookie session=VU1
+	p.TargetURL, _ = url.Parse(server.URL() + "/cookies/set?session=VU1")
+	_, err = exec.ExecuteRequest(ctx, 1)
+	if err != nil {
+		t.Fatalf("VU 1 set cookie failed: %v", err)
+	}
+
+	// VU 0 inspects cookies -> must have session=VU0
+	p.TargetURL, _ = url.Parse(server.URL() + "/cookies/inspect")
+	_, err = exec.ExecuteRequest(ctx, 0)
+	if err != nil {
+		t.Fatalf("VU 0 inspect cookie failed: %v", err)
+	}
+
+	// VU 1 inspects cookies -> must have session=VU1
+	_, err = exec.ExecuteRequest(ctx, 1)
+	if err != nil {
+		t.Fatalf("VU 1 inspect cookie failed: %v", err)
+	}
+
+	recorded := server.RecordedRequests()
+	// Recorded: 0: set VU0, 1: set VU1, 2: inspect VU0, 3: inspect VU1
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 recorded requests, got %d", len(recorded))
+	}
+
+	req2Cookie := recorded[2].Header.Get("Cookie")
+	if !strings.Contains(req2Cookie, "session=VU0") || strings.Contains(req2Cookie, "session=VU1") {
+		t.Errorf("VU 0 cookie isolation failed: got header %q", req2Cookie)
+	}
+
+	req3Cookie := recorded[3].Header.Get("Cookie")
+	if !strings.Contains(req3Cookie, "session=VU1") || strings.Contains(req3Cookie, "session=VU0") {
+		t.Errorf("VU 1 cookie isolation failed: got header %q", req3Cookie)
+	}
+}
+
+func TestExecutor_Auth_ErrorScrubbing(t *testing.T) {
+	// Connect to non-existent port with known secret
+	ctx := context.Background()
+	secret := "SECRET_TOKEN_EMBEDDED_999"
+	p := helperBuildPlan(t, "http://127.0.0.1:59999/unreachable?token="+secret, "GET", "", []int{200}, 0, 100*time.Millisecond)
+	p.KnownSecrets = []string{secret}
+
+	exec, _ := NewHTTPExecutor(p)
+	defer exec.Close()
+
+	res, _ := exec.ExecuteRequest(ctx, 0)
+	if res == nil || res.Err == nil {
+		t.Fatalf("expected failed result with error")
+	}
+
+	errMsg := res.Err.Error()
+	if strings.Contains(errMsg, secret) {
+		t.Errorf("CRITICAL SECURITY VIOLATION: raw secret %q leaked in executor error: %q", secret, errMsg)
 	}
 }

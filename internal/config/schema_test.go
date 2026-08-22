@@ -190,6 +190,9 @@ func TestParseAndValidateYAML_ExampleConfigs(t *testing.T) {
 	exampleFiles := []string{
 		filepath.Join("..", "..", "examples", "open-api-capacity.yaml"),
 		filepath.Join("..", "..", "examples", "closed-api-smoke.yaml"),
+		filepath.Join("..", "..", "examples", "authenticated-api.yaml"),
+		filepath.Join("..", "..", "examples", "token-pool-load.yaml"),
+		filepath.Join("..", "..", "examples", "cookie-session-closed.yaml"),
 	}
 
 	for _, file := range exampleFiles {
@@ -200,10 +203,20 @@ func TestParseAndValidateYAML_ExampleConfigs(t *testing.T) {
 			}
 
 			expanded, err := config.ExpandEnv(rawBytes, func(k string) string {
-				if k == "TARGET_URL" {
+				switch k {
+				case "TARGET_URL":
 					return "http://127.0.0.1:8080"
+				case "API_TOKEN":
+					return "secret_api_bearer_token"
+				case "TOKEN_1":
+					return "tok_alpha_1"
+				case "TOKEN_2":
+					return "tok_beta_2"
+				case "TOKEN_3":
+					return "tok_gamma_3"
+				default:
+					return ""
 				}
-				return ""
 			})
 			if err != nil {
 				t.Fatalf("failed to expand env in %s: %v", file, err)

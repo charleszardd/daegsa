@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/charleszardd/daegsa/internal/core"
@@ -34,13 +35,22 @@ func Execute() core.ExitCode {
 
 // ExecuteContext runs the CLI commands with the provided context and arguments.
 func ExecuteContext(ctx context.Context, args []string) core.ExitCode {
+	return executeContext(ctx, args, os.Stdout, os.Stderr)
+}
+
+// executeContext runs the CLI with explicit output streams. Keeping output on
+// Cobra's writers makes command behavior testable without replacing process-wide
+// stdout or stderr.
+func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer) core.ExitCode {
 	rootCmd := NewRootCmd()
 	rootCmd.SetArgs(args)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
 
 	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		code := DetermineExitCode(err)
-		fmt.Fprintln(os.Stderr, FormatSingleLineSummary(err, code))
+		fmt.Fprintln(stderr, FormatSingleLineSummary(err, code))
 		return code
 	}
 

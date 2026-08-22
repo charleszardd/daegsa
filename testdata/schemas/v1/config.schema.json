@@ -109,6 +109,37 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["none", "bearer", "custom_header", "token_pool", "basic"]
+        },
+        "token": {
+          "type": "string"
+        },
+        "header_name": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "token_pool": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cookie_jar": {
+          "type": "boolean"
+        }
+      }
+    },
     "thresholds": {
       "type": "object",
       "additionalProperties": {

@@ -52,7 +52,7 @@ func (e *PreflightEngine) Check(ctx context.Context, cfg *config.Config, flags S
 
 	targetURL, err := url.Parse(cfg.Request.URL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid target URL %q: %w", ErrSafetyRefusal, cfg.Request.URL, err)
+		return nil, fmt.Errorf("%w: invalid target URL %q", ErrSafetyRefusal, config.RedactURL(cfg.Request.URL))
 	}
 
 	host := targetURL.Hostname()

@@ -39,8 +39,16 @@ type Report struct {
 	Latency             LatencySummary         `json:"latency"`
 	RateLimits          RateLimitObservations  `json:"rate_limits"`
 	GeneratorHealth     GeneratorHealth        `json:"generator_health"`
+	Auth                *AuthReportSummary     `json:"auth,omitempty"`
 	Thresholds          []ThresholdResult      `json:"thresholds"`
 	Incomplete          bool                   `json:"incomplete"`
+}
+
+// AuthReportSummary records sanitized authentication metadata in the JSON report (§11, §13).
+type AuthReportSummary struct {
+	AuthMode         string `json:"auth_mode"`
+	TokenCount       int    `json:"token_count"`
+	CookieJarEnabled bool   `json:"cookie_jar_enabled"`
 }
 
 // ThresholdResult records the pass/fail evaluation of a single threshold expression (§10, §13).

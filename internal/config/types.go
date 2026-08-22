@@ -18,13 +18,13 @@ const ExpectedSchemaVersion = 1
 
 // Default configuration constants.
 const (
-	DefaultRequestTimeout      = 10 * time.Second
-	DefaultGracefulStop        = 10 * time.Second
-	DefaultTimeUnit            = 1 * time.Second
-	DefaultResponseBodyLimit   = 1024 * 1024 // 1 MiB
+	DefaultRequestTimeout       = 10 * time.Second
+	DefaultGracefulStop         = 10 * time.Second
+	DefaultTimeUnit             = 1 * time.Second
+	DefaultResponseBodyLimit    = 1024 * 1024 // 1 MiB
 	DefaultResponseBodyLimitStr = "1MiB"
-	DefaultRedirects           = "same-origin"
-	MaxResponseBodyLimitBytes  = 50 * 1024 * 1024 // 50 MiB hard safety ceiling
+	DefaultRedirects            = "same-origin"
+	MaxResponseBodyLimitBytes   = 50 * 1024 * 1024 // 50 MiB hard safety ceiling
 )
 
 // Allowed redirect policies (§6, §8).
@@ -32,6 +32,15 @@ const (
 	RedirectPolicySameOrigin = core.RedirectPolicySameOrigin
 	RedirectPolicyNone       = core.RedirectPolicyNone
 	RedirectPolicyAll        = core.RedirectPolicyAll
+)
+
+// Supported authentication types (§6, §11).
+const (
+	AuthTypeNone         = "none"
+	AuthTypeBearer       = "bearer"
+	AuthTypeCustomHeader = "custom_header"
+	AuthTypeTokenPool    = "token_pool"
+	AuthTypeBasic        = "basic"
 )
 
 // Duration wraps time.Duration to provide string parsing in YAML and JSON (e.g. "5s", "250ms").
@@ -105,8 +114,20 @@ type Config struct {
 	Request       RequestConfig     `yaml:"request" json:"request"`
 	Load          LoadConfig        `yaml:"load" json:"load"`
 	RateLimit     RateLimitConfig   `yaml:"rate_limit,omitempty" json:"rate_limit,omitempty"`
+	Auth          AuthConfig        `yaml:"auth,omitempty" json:"auth,omitempty"`
 	Thresholds    map[string]string `yaml:"thresholds,omitempty" json:"thresholds,omitempty"`
 	Safety        SafetyConfig      `yaml:"safety,omitempty" json:"safety,omitempty"`
+}
+
+// AuthConfig defines static authentication and credential configuration (§6, §11).
+type AuthConfig struct {
+	Type       string   `yaml:"type,omitempty" json:"type,omitempty"`
+	Token      string   `yaml:"token,omitempty" json:"token,omitempty"`
+	HeaderName string   `yaml:"header_name,omitempty" json:"header_name,omitempty"`
+	Username   string   `yaml:"username,omitempty" json:"username,omitempty"`
+	Password   string   `yaml:"password,omitempty" json:"password,omitempty"`
+	TokenPool  []string `yaml:"token_pool,omitempty" json:"token_pool,omitempty"`
+	CookieJar  bool     `yaml:"cookie_jar,omitempty" json:"cookie_jar,omitempty"`
 }
 
 // RequestConfig defines HTTP target and execution options (§6).

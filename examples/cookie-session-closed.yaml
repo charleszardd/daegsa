@@ -1,0 +1,37 @@
+schema_version: 1
+name: cookie-session-closed-test
+
+request:
+  url: ${TARGET_URL}/cookies/inspect
+  method: GET
+  headers:
+    Accept: application/json
+  expected_statuses: [200]
+  timeout: 5s
+  response_body_limit: 1MiB
+  redirects: same-origin
+
+auth:
+  type: none
+  cookie_jar: true
+
+load:
+  model: closed
+  users: 5
+  think_time: 50ms
+  duration: 10s
+  graceful_stop: 2s
+
+rate_limit:
+  treat_429_as_expected: false
+
+thresholds:
+  http_error_rate: "== 0%"
+  p95: "<= 100ms"
+  completed_requests: ">= 20"
+
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+  allow_non_idempotent: false

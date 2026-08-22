@@ -1,10 +1,12 @@
 package testtarget
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,6 +15,10 @@ func (s *TargetServer) buildHandler() http.Handler {
 
 	mux.HandleFunc("/cookies/set", s.handleCookiesSet)
 	mux.HandleFunc("/cookies/inspect", s.handleCookiesInspect)
+	mux.HandleFunc("/auth/bearer", s.handleAuthBearer)
+	mux.HandleFunc("/auth/header", s.handleAuthHeader)
+	mux.HandleFunc("/auth/basic", s.handleAuthBasic)
+	mux.HandleFunc("/auth/token-pool", s.handleAuthTokenPool)
 	mux.HandleFunc("/", s.handleGeneralRequest)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,4 +204,83 @@ func (s *TargetServer) handleCookiesInspect(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(cookieMap)
+}
+
+func (s *TargetServer) handleAuthBearer(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") && len(strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"authenticated":true,"mode":"bearer"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"unauthorized","expected":"Bearer <token>"}`))
+}
+
+func (s *TargetServer) handleAuthHeader(w http.ResponseWriter, r *http.Request) {
+	headerKey := r.URL.Query().Get("header_name")
+	if headerKey == "" {
+		headerKey = "X-API-Key"
+	}
+	val := r.Header.Get(headerKey)
+	if val == "" {
+		val = r.Header.Get("X-Auth-Token")
+	}
+	if val == "" {
+		val = r.Header.Get("X-API-Key")
+	}
+	if val != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"authenticated":true,"mode":"custom_header"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"unauthorized","expected_header":"custom header"}`))
+}
+
+func (s *TargetServer) handleAuthBasic(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := r.BasicAuth()
+	if ok && user != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"authenticated":true,"mode":"basic","user":%q}`, user)))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"unauthorized","expected":"Basic auth credentials"}`))
+}
+
+func (s *TargetServer) handleAuthTokenPool(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	tok := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		tok = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if authHeader != "" {
+		tok = authHeader
+	} else {
+		tok = r.Header.Get("X-API-Key")
+		if tok == "" {
+			tok = r.Header.Get("X-API-Token")
+		}
+		if tok == "" {
+			tok = r.Header.Get("X-Auth-Token")
+		}
+	}
+
+	if tok != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		tokenHash := sha256.Sum256([]byte(tok))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"authenticated":true,"token_hash":%q}`, fmt.Sprintf("%x", tokenHash[:8]))))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"unauthorized","message":"missing token"}`))
 }

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/auth"
 	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/safety"
@@ -39,6 +40,13 @@ type Plan struct {
 	AllowedHosts       []string
 	AllowNonIdempotent bool
 	ResolvedIPs        []net.IP
+	AuthType           string
+	AuthHeaderName     string
+	TokenProvider      auth.TokenProvider
+	Authenticator      *auth.RequestAuthenticator
+	JarManager         *auth.VUJarManager
+	CookieJarEnabled   bool
+	KnownSecrets       []string
 }
 
 // BuildPlan constructs a deeply cloned, immutable Plan from a validated Config and PreflightResult (§4, §7).
@@ -105,6 +113,45 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		clonedThresholds[i] = t.Clone()
 	}
 
+	// Initialize authentication and per-VU session manager
+	authenticator, err := auth.NewAuthenticator(&cfg.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build authenticator: %w", err)
+	}
+
+	tokenProvider, err := auth.NewTokenProvider(&cfg.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build token provider: %w", err)
+	}
+
+	numVUs := int(cfg.Load.Users)
+	if cfg.Load.Model == core.WorkloadModelOpen {
+		numVUs = int(cfg.Load.MaxInFlight)
+	}
+	jarManager, err := auth.NewVUJarManager(cfg.Auth.CookieJar, numVUs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build cookie jar manager: %w", err)
+	}
+
+	// Collect known secrets for redaction/scrubbing
+	var knownSecrets []string
+	if cfg.Auth.Token != "" {
+		knownSecrets = append(knownSecrets, cfg.Auth.Token)
+	}
+	if cfg.Auth.Password != "" {
+		knownSecrets = append(knownSecrets, cfg.Auth.Password)
+	}
+	for _, tok := range cfg.Auth.TokenPool {
+		if tok != "" {
+			knownSecrets = append(knownSecrets, tok)
+		}
+	}
+	for k, v := range cfg.Request.Headers {
+		if config.IsSensitiveHeader(k) && v != "" {
+			knownSecrets = append(knownSecrets, v)
+		}
+	}
+
 	p := &Plan{
 		Name:               cfg.Name,
 		SchemaVersion:      cfg.SchemaVersion,
@@ -129,6 +176,13 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		AllowedHosts:       allowedHosts,
 		AllowNonIdempotent: cfg.Safety.AllowNonIdempotent,
 		ResolvedIPs:        resolvedIPs,
+		AuthType:           authenticator.AuthMode(),
+		AuthHeaderName:     cfg.Auth.HeaderName,
+		TokenProvider:      tokenProvider,
+		Authenticator:      authenticator,
+		JarManager:         jarManager,
+		CookieJarEnabled:   cfg.Auth.CookieJar,
+		KnownSecrets:       knownSecrets,
 	}
 
 	return p, nil

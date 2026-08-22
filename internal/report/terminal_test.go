@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/auth"
+	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/plan"
 )
@@ -347,5 +349,59 @@ func TestFormatTerminalReport_AllThresholdsPassBanner(t *testing.T) {
 
 	if !strings.Contains(output, "TEST RESULT: PASS") {
 		t.Errorf("expected PASS banner when all thresholds pass, got:\n%s", output)
+	}
+}
+
+func TestFormatTerminalReport_AuthSummary(t *testing.T) {
+	parsedURL, _ := url.Parse("https://api.example.com/items")
+	tokens := []string{"secret-tok-1", "secret-tok-2", "secret-tok-3"}
+	authn, _ := auth.NewAuthenticator(&config.AuthConfig{
+		Type:      config.AuthTypeTokenPool,
+		TokenPool: tokens,
+	})
+
+	p := &plan.Plan{
+		Name:             "auth-terminal-test",
+		TargetURL:        parsedURL,
+		Method:           "GET",
+		Model:            core.WorkloadModelClosed,
+		Users:            3,
+		Duration:         5 * time.Second,
+		Authenticator:    authn,
+		CookieJarEnabled: true,
+		KnownSecrets:     tokens,
+	}
+
+	rep := &Report{
+		ReportSchemaVersion: 1,
+		DurationMS:          5000,
+		RequestCounts: RequestCounts{
+			Planned:   100,
+			Started:   100,
+			Completed: 100,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 100,
+		},
+		Auth: &AuthReportSummary{
+			AuthMode:         "token_pool",
+			TokenCount:       3,
+			CookieJarEnabled: true,
+		},
+		Incomplete: false,
+	}
+
+	output := FormatTerminalReport(rep, p)
+
+	// Assert no secret tokens appear
+	for _, tok := range tokens {
+		if strings.Contains(output, tok) {
+			t.Errorf("CRITICAL SECURITY VIOLATION: secret %q leaked in terminal report: %s", tok, output)
+		}
+	}
+
+	// Assert auth banner line exists
+	if !strings.Contains(output, "Auth:              token_pool (3 token(s), cookie jar enabled)") {
+		t.Errorf("missing or incorrect Auth line in terminal report: %s", output)
 	}
 }

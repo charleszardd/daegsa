@@ -297,7 +297,7 @@ func (s *OpenScheduler) runWorker(
 	for job := range dispatchChan {
 		wm.Started++
 
-		res, err := s.executor.ExecuteRequest(job.ctx)
+		res, err := s.executor.ExecuteRequest(job.ctx, workerID)
 		s.inFlightCount.Add(-1)
 
 		if res != nil {

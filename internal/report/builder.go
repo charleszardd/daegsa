@@ -55,6 +55,19 @@ func BuildReport(
 	if p != nil {
 		rep.ConfigFingerprint = p.Fingerprint
 		rep.WorkloadModel = p.Model
+		if p.Authenticator != nil {
+			rep.Auth = &AuthReportSummary{
+				AuthMode:         p.Authenticator.AuthMode(),
+				TokenCount:       p.Authenticator.TokenCount(),
+				CookieJarEnabled: p.CookieJarEnabled,
+			}
+		} else if p.AuthType != "" {
+			rep.Auth = &AuthReportSummary{
+				AuthMode:         p.AuthType,
+				TokenCount:       0,
+				CookieJarEnabled: p.CookieJarEnabled,
+			}
+		}
 	}
 
 	if agg != nil {

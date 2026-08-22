@@ -207,7 +207,7 @@ func (s *ClosedScheduler) runVU(
 		s.inFlightCount.Add(1)
 
 		// Execute HTTP request
-		res, err := s.executor.ExecuteRequest(ctx)
+		res, err := s.executor.ExecuteRequest(ctx, workerID)
 		s.inFlightCount.Add(-1)
 
 		if res != nil {

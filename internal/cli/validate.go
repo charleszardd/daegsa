@@ -24,8 +24,8 @@ func newValidateCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Print(plan.FormatPlanSummary(p))
-			fmt.Println("Configuration and safety preflight validation PASSED.")
+			fmt.Fprint(cmd.OutOrStdout(), plan.FormatPlanSummary(p))
+			fmt.Fprintln(cmd.OutOrStdout(), "Configuration and safety preflight validation PASSED.")
 			return nil
 		},
 	}
