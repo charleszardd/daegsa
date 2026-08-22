@@ -84,6 +84,11 @@ func ValidateConfig(cfg *Config) error {
 		return err
 	}
 
+	// 6. Auth validation & normalization
+	if err := validateAuth(&cfg.Auth); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -95,7 +100,7 @@ func validateRequestConfig(req *RequestConfig) error {
 
 	parsedURL, err := url.Parse(trimmedURL)
 	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
-		return fmt.Errorf("%w: request.url must be a valid absolute http/https URL, got %q", ErrConfigValidation, req.URL)
+		return fmt.Errorf("%w: request.url must be a valid absolute http/https URL, got %q", ErrConfigValidation, RedactURL(req.URL))
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
@@ -220,6 +225,63 @@ func validateThresholds(thresholds map[string]string) error {
 			return fmt.Errorf("%w: %w", ErrConfigValidation, err)
 		}
 	}
+	return nil
+}
+
+func validateAuth(auth *AuthConfig) error {
+	if auth == nil {
+		return nil
+	}
+
+	auth.Type = strings.ToLower(strings.TrimSpace(auth.Type))
+	if auth.Type == "" {
+		auth.Type = AuthTypeNone
+	}
+
+	switch auth.Type {
+	case AuthTypeNone:
+		// No credentials required.
+	case AuthTypeBearer:
+		if strings.TrimSpace(auth.Token) == "" {
+			return fmt.Errorf("%w: auth.type 'bearer' requires non-empty auth.token", ErrConfigValidation)
+		}
+		if strings.TrimSpace(auth.HeaderName) == "" {
+			auth.HeaderName = "Authorization"
+		} else if !strings.EqualFold(strings.TrimSpace(auth.HeaderName), "Authorization") {
+			return fmt.Errorf("%w: auth.type 'bearer' only supports the Authorization header", ErrConfigValidation)
+		} else {
+			auth.HeaderName = "Authorization"
+		}
+	case AuthTypeCustomHeader:
+		if strings.TrimSpace(auth.Token) == "" {
+			return fmt.Errorf("%w: auth.type 'custom_header' requires non-empty auth.token", ErrConfigValidation)
+		}
+		if strings.TrimSpace(auth.HeaderName) == "" {
+			return fmt.Errorf("%w: auth.type 'custom_header' requires non-empty auth.header_name", ErrConfigValidation)
+		}
+	case AuthTypeBasic:
+		if strings.TrimSpace(auth.Username) == "" {
+			return fmt.Errorf("%w: auth.type 'basic' requires non-empty auth.username", ErrConfigValidation)
+		}
+		if strings.TrimSpace(auth.HeaderName) == "" {
+			auth.HeaderName = "Authorization"
+		}
+	case AuthTypeTokenPool:
+		if len(auth.TokenPool) == 0 {
+			return fmt.Errorf("%w: auth.type 'token_pool' requires non-empty auth.token_pool", ErrConfigValidation)
+		}
+		for i, tok := range auth.TokenPool {
+			if strings.TrimSpace(tok) == "" {
+				return fmt.Errorf("%w: auth.token_pool[%d] cannot be empty", ErrConfigValidation, i)
+			}
+		}
+		if strings.TrimSpace(auth.HeaderName) == "" {
+			auth.HeaderName = "Authorization"
+		}
+	default:
+		return fmt.Errorf("%w: unsupported auth.type %q, must be 'none', 'bearer', 'custom_header', 'token_pool', or 'basic'", ErrConfigValidation, auth.Type)
+	}
+
 	return nil
 }
 

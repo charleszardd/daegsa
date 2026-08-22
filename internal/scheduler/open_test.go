@@ -3,12 +3,19 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/auth"
 	"github.com/charleszardd/daegsa/internal/clock"
+	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/executor"
 	"github.com/charleszardd/daegsa/internal/metrics"
@@ -627,5 +634,118 @@ func TestOpenScheduler_Integration_ServerErrorAndDisconnect(t *testing.T) {
 	}
 	if sched.InFlight() != 0 {
 		t.Errorf("expected in-flight count to return to 0 after run, got %d", sched.InFlight())
+	}
+}
+
+func TestOpenScheduler_TokenPool_Deterministic(t *testing.T) {
+	tokens := []string{"token-0", "token-1", "token-2", "token-3", "token-4"}
+	const workerLanes = 10
+
+	var requestMu sync.Mutex
+	observedWorkerTokens := make(map[int]string, workerLanes)
+	validationErrors := make(chan string, workerLanes)
+	firstWaveArrived := make(chan struct{})
+	var firstWaveOnce sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		workerCookie, cookieErr := request.Cookie("worker_id")
+		if cookieErr != nil {
+			validationErrors <- "missing lane identity cookie: " + cookieErr.Error()
+			<-request.Context().Done()
+			return
+		}
+		workerID, parseErr := strconv.Atoi(workerCookie.Value)
+		if parseErr != nil || workerID < 0 || workerID >= workerLanes {
+			validationErrors <- "invalid lane identity cookie " + workerCookie.Value
+			<-request.Context().Done()
+			return
+		}
+		expectedToken := tokens[workerID%len(tokens)]
+		if token != expectedToken {
+			validationErrors <- fmt.Sprintf("lane %d token = %q, want %q", workerID, token, expectedToken)
+			<-request.Context().Done()
+			return
+		}
+
+		requestMu.Lock()
+		observedWorkerTokens[workerID] = token
+		if len(observedWorkerTokens) == workerLanes {
+			firstWaveOnce.Do(func() { close(firstWaveArrived) })
+		}
+		requestMu.Unlock()
+
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	authenticator, err := auth.NewAuthenticator(&config.AuthConfig{
+		Type:      config.AuthTypeTokenPool,
+		TokenPool: tokens,
+	})
+	if err != nil {
+		t.Fatalf("failed to create authenticator: %v", err)
+	}
+
+	p := createOpenTestPlan(server.URL, 10000, time.Second, workerLanes, 5*time.Second, 1*time.Second)
+	p.Authenticator = authenticator
+	p.KnownSecrets = tokens
+	jarManager, jarErr := auth.NewVUJarManager(true, workerLanes)
+	if jarErr != nil {
+		t.Fatalf("failed to create worker identity jars: %v", jarErr)
+	}
+	parsedTargetURL, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("failed to parse target URL: %v", parseErr)
+	}
+	for workerID := 0; workerID < workerLanes; workerID++ {
+		jarManager.GetJar(workerID).SetCookies(parsedTargetURL, []*http.Cookie{{
+			Name:  "worker_id",
+			Value: strconv.Itoa(workerID),
+			Path:  "/",
+		}})
+	}
+	p.JarManager = jarManager
+	p.CookieJarEnabled = true
+	exec, err := executor.NewHTTPExecutor(p)
+	if err != nil {
+		t.Fatalf("failed to create executor: %v", err)
+	}
+	defer exec.Close()
+
+	scheduler, err := NewOpenScheduler(p, exec, clock.NewRealClock())
+	if err != nil {
+		t.Fatalf("failed to create scheduler: %v", err)
+	}
+
+	runContext, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, _, runErr := scheduler.Run(runContext)
+		runDone <- runErr
+	}()
+
+	select {
+	case <-firstWaveArrived:
+		cancelRun()
+	case validationErr := <-validationErrors:
+		cancelRun()
+		t.Fatal(validationErr)
+	case <-time.After(schedulerContractTimeout):
+		cancelRun()
+		t.Fatal("timed out waiting for every open-model worker lane to issue its first request")
+	}
+
+	if runErr := <-runDone; runErr != nil {
+		t.Fatalf("scheduler run failed: %v", runErr)
+	}
+
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	for workerID := 0; workerID < workerLanes; workerID++ {
+		expectedToken := tokens[workerID%len(tokens)]
+		if got := observedWorkerTokens[workerID]; got != expectedToken {
+			t.Errorf("lane %d token = %q, want %q", workerID, got, expectedToken)
+		}
 	}
 }

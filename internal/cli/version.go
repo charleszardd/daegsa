@@ -20,7 +20,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print DAEGSA version and build metadata",
 		Long:  "Print DAEGSA version, Git commit SHA, build date, Go runtime version, OS, and architecture.",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("daegsa version %s (commit: %s, built: %s, runtime: %s %s/%s)\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "daegsa version %s (commit: %s, built: %s, runtime: %s %s/%s)\n",
 				Version, Commit, BuildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		},
 	}

@@ -59,6 +59,16 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 		sb.WriteString(fmt.Sprintf("  Workload Model:    %s\n", rep.WorkloadModel))
 	}
 
+	if p != nil && p.Authenticator != nil && p.Authenticator.AuthMode() != "none" {
+		cookieNote := ""
+		if p.CookieJarEnabled {
+			cookieNote = ", cookie jar enabled"
+		}
+		sb.WriteString(fmt.Sprintf("  Auth:              %s (%d token(s)%s)\n", p.Authenticator.AuthMode(), p.Authenticator.TokenCount(), cookieNote))
+	} else if p != nil && p.CookieJarEnabled {
+		sb.WriteString("  Auth:              none (cookie jar enabled)\n")
+	}
+
 	if p != nil {
 		sb.WriteString(fmt.Sprintf("  Duration:          Planned: %s, Elapsed: %dms\n", p.Duration, rep.DurationMS))
 	} else {

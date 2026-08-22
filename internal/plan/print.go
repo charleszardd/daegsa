@@ -60,6 +60,32 @@ func FormatPlanSummary(p *Plan) string {
 	}
 
 	sb.WriteString("--------------------------------------------------------------------------------\n")
+	sb.WriteString("                         AUTHENTICATION & SECRETS\n")
+	sb.WriteString("--------------------------------------------------------------------------------\n")
+	authMode := "none"
+	tokenCount := 0
+	if p.Authenticator != nil && p.Authenticator.AuthMode() != "" {
+		authMode = p.Authenticator.AuthMode()
+		tokenCount = p.Authenticator.TokenCount()
+	} else if p.AuthType != "" {
+		authMode = p.AuthType
+	}
+	cookieJarStr := "disabled"
+	if p.CookieJarEnabled {
+		cookieJarStr = "enabled"
+	}
+	sb.WriteString(fmt.Sprintf("Auth Mode:            %s\n", authMode))
+	if authMode != "none" {
+		headerName := p.AuthHeaderName
+		if headerName == "" {
+			headerName = "Authorization"
+		}
+		sb.WriteString(fmt.Sprintf("Header Name:          %s\n", headerName))
+		sb.WriteString(fmt.Sprintf("Token Pool Size:      %d\n", tokenCount))
+	}
+	sb.WriteString(fmt.Sprintf("Cookie Jar Isolation: %s\n", cookieJarStr))
+
+	sb.WriteString("--------------------------------------------------------------------------------\n")
 	sb.WriteString("                         SAFETY & NETWORK PREFLIGHT\n")
 	sb.WriteString("--------------------------------------------------------------------------------\n")
 	if len(p.AllowedHosts) > 0 {

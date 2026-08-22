@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charleszardd/daegsa/internal/config"
@@ -666,5 +669,308 @@ safety:
 		if thMap["expression"] == "" || thMap["target"] == "" || thMap["observed"] == "" {
 			t.Errorf("threshold[%d] missing fields: %+v", i, thMap)
 		}
+	}
+}
+
+func TestCLI_Run_AuthenticatedExamples(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	t.Setenv("TARGET_URL", server.URL())
+	t.Setenv("API_TOKEN", "secret-bearer-token-123")
+	t.Setenv("TOKEN_1", "tok-1-alpha")
+	t.Setenv("TOKEN_2", "tok-2-beta")
+	t.Setenv("TOKEN_3", "tok-3-gamma")
+
+	examples := []string{
+		filepath.Join("..", "..", "examples", "authenticated-api.yaml"),
+		filepath.Join("..", "..", "examples", "token-pool-load.yaml"),
+		filepath.Join("..", "..", "examples", "cookie-session-closed.yaml"),
+	}
+
+	ctx := context.Background()
+
+	for _, ex := range examples {
+		t.Run(filepath.Base(ex), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			outJSON := filepath.Join(tmpDir, "report.json")
+
+			// 1. Test validate command
+			valCode := ExecuteContext(ctx, []string{"validate", "--config", ex})
+			if valCode != core.ExitCodeSuccess {
+				t.Fatalf("daegsa validate %s failed with exit code %d", ex, valCode)
+			}
+
+			// 2. Test dry-run
+			dryCode := ExecuteContext(ctx, []string{"run", "--config", ex, "--dry-run"})
+			if dryCode != core.ExitCodeSuccess {
+				t.Fatalf("daegsa run --dry-run %s failed with exit code %d", ex, dryCode)
+			}
+
+			// 3. Test actual run with short duration override
+			runCode := ExecuteContext(ctx, []string{
+				"run",
+				"--config", ex,
+				"--duration", "500ms",
+				"--output-json", outJSON,
+			})
+			if runCode != core.ExitCodeSuccess {
+				t.Fatalf("daegsa run %s failed with exit code %d", ex, runCode)
+			}
+
+			// 4. Verify JSON report was created and has auth metadata
+			data, err := os.ReadFile(outJSON)
+			if err != nil {
+				t.Fatalf("failed to read JSON report %s: %v", outJSON, err)
+			}
+
+			// Zero secret leakage in report
+			prohibited := []string{"secret-bearer-token-123", "tok-1-alpha", "tok-2-beta", "tok-3-gamma"}
+			for _, sec := range prohibited {
+				if strings.Contains(string(data), sec) {
+					t.Fatalf("CRITICAL: Secret %q leaked in exported JSON report: %s", sec, string(data))
+				}
+			}
+
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				t.Fatalf("invalid JSON report: %v", err)
+			}
+			if authObj, ok := parsed["auth"].(map[string]interface{}); ok {
+				if authObj["auth_mode"] == "" {
+					t.Errorf("expected non-empty auth_mode in report")
+				}
+			}
+		})
+	}
+}
+
+func TestCLI_AuthenticationSecretsNeverReachOutput(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	const (
+		bearerSecret   = "SECRET_TOKEN_ALPHA_999"
+		passwordSecret = "SECRET_PASS_BETA_888"
+		apiKeySecret   = "SECRET_APIKEY_GAMMA_777"
+		poolSecretOne  = "SECRET_POOL_DELTA_666"
+		poolSecretTwo  = "SECRET_POOL_EPSILON_555"
+		querySecret    = "SECRET_QUERY_ZETA_444"
+	)
+	secrets := []string{bearerSecret, passwordSecret, apiKeySecret, poolSecretOne, poolSecretTwo, querySecret}
+
+	t.Setenv("CLI_BEARER_SECRET", bearerSecret)
+	t.Setenv("CLI_PASSWORD_SECRET", passwordSecret)
+	t.Setenv("CLI_API_KEY_SECRET", apiKeySecret)
+	t.Setenv("CLI_POOL_SECRET_ONE", poolSecretOne)
+	t.Setenv("CLI_POOL_SECRET_TWO", poolSecretTwo)
+	t.Setenv("CLI_QUERY_SECRET", querySecret)
+
+	authCases := []struct {
+		name     string
+		path     string
+		authYAML string
+	}{
+		{name: "bearer", path: "/auth/bearer", authYAML: "  type: bearer\n  token: ${CLI_BEARER_SECRET}\n"},
+		{name: "custom header", path: "/auth/header?header_name=X-API-Key", authYAML: "  type: custom_header\n  header_name: X-API-Key\n  token: ${CLI_API_KEY_SECRET}\n"},
+		{name: "basic", path: "/auth/basic", authYAML: "  type: basic\n  username: load-user\n  password: ${CLI_PASSWORD_SECRET}\n"},
+		{name: "token pool", path: "/auth/token-pool", authYAML: "  type: token_pool\n  token_pool:\n    - ${CLI_POOL_SECRET_ONE}\n    - ${CLI_POOL_SECRET_TWO}\n"},
+	}
+
+	for _, testCase := range authCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			temporaryDirectory := t.TempDir()
+			configPath := filepath.Join(temporaryDirectory, "auth.yaml")
+			reportPath := filepath.Join(temporaryDirectory, "report.json")
+			targetURL := server.URL() + testCase.path
+			querySeparator := "?"
+			if strings.Contains(targetURL, "?") {
+				querySeparator = "&"
+			}
+
+			manifest := fmt.Sprintf(`schema_version: 1
+name: cli-secret-leakage
+request:
+  url: %s%sapi_key=${CLI_QUERY_SECRET}
+  method: GET
+  headers:
+    X-Trace-Secret: ${CLI_API_KEY_SECRET}
+load:
+  model: closed
+  users: 2
+  duration: 75ms
+auth:
+%ssafety:
+  allowed_hosts:
+    - 127.0.0.1
+`, targetURL, querySeparator, testCase.authYAML)
+			if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+				t.Fatalf("failed to write authentication manifest: %v", err)
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			validateCode := executeContext(context.Background(), []string{"validate", "--config", configPath}, &stdout, &stderr)
+			if validateCode != core.ExitCodeSuccess {
+				t.Fatalf("validate exit code = %d, want %d; stderr=%s", validateCode, core.ExitCodeSuccess, stderr.String())
+			}
+			assertSecretsAbsent(t, "validate output", stdout.String()+stderr.String(), secrets)
+
+			stdout.Reset()
+			stderr.Reset()
+			dryRunCode := executeContext(context.Background(), []string{"run", "--config", configPath, "--dry-run"}, &stdout, &stderr)
+			if dryRunCode != core.ExitCodeSuccess {
+				t.Fatalf("dry-run exit code = %d, want %d; stderr=%s", dryRunCode, core.ExitCodeSuccess, stderr.String())
+			}
+			assertSecretsAbsent(t, "dry-run output", stdout.String()+stderr.String(), secrets)
+
+			stdout.Reset()
+			stderr.Reset()
+			runCode := executeContext(context.Background(), []string{"run", "--config", configPath, "--output-json", reportPath}, &stdout, &stderr)
+			if runCode != core.ExitCodeSuccess {
+				t.Fatalf("run exit code = %d, want %d; stderr=%s", runCode, core.ExitCodeSuccess, stderr.String())
+			}
+			assertSecretsAbsent(t, "terminal output", stdout.String()+stderr.String(), secrets)
+
+			reportBytes, err := os.ReadFile(reportPath)
+			if err != nil {
+				t.Fatalf("failed to read JSON report: %v", err)
+			}
+			assertSecretsAbsent(t, "JSON report", string(reportBytes), secrets)
+			var reportDocument struct {
+				ConfigFingerprint string `json:"config_fingerprint"`
+			}
+			if err := json.Unmarshal(reportBytes, &reportDocument); err != nil {
+				t.Fatalf("failed to parse JSON report: %v", err)
+			}
+			if len(reportDocument.ConfigFingerprint) != 64 {
+				t.Errorf("configuration fingerprint length = %d, want 64", len(reportDocument.ConfigFingerprint))
+			}
+			assertSecretsAbsent(t, "configuration fingerprint", reportDocument.ConfigFingerprint, secrets)
+		})
+	}
+
+	t.Run("failure stderr", func(t *testing.T) {
+		temporaryDirectory := t.TempDir()
+		configPath := filepath.Join(temporaryDirectory, "threshold-failure.yaml")
+		reportPath := filepath.Join(temporaryDirectory, "failure-report.json")
+		manifest := fmt.Sprintf(`schema_version: 1
+name: cli-secret-failure
+request:
+  url: %s/auth/bearer?token=${CLI_QUERY_SECRET}
+  method: GET
+load:
+  model: closed
+  users: 1
+  duration: 50ms
+auth:
+  type: bearer
+  token: ${CLI_BEARER_SECRET}
+thresholds:
+  completed_requests: ">= 999999"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`, server.URL())
+		if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+			t.Fatalf("failed to write failure manifest: %v", err)
+		}
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := executeContext(context.Background(), []string{"run", "--config", configPath, "--output-json", reportPath}, &stdout, &stderr)
+		if exitCode != core.ExitCodeThresholdFailure {
+			t.Fatalf("failure exit code = %d, want %d; stderr=%s", exitCode, core.ExitCodeThresholdFailure, stderr.String())
+		}
+		if stderr.Len() == 0 {
+			t.Fatal("expected a CI failure summary on stderr")
+		}
+		assertSecretsAbsent(t, "failure stdout and stderr", stdout.String()+stderr.String(), secrets)
+		reportBytes, err := os.ReadFile(reportPath)
+		if err != nil {
+			t.Fatalf("failed to read failure JSON report: %v", err)
+		}
+		assertSecretsAbsent(t, "failure JSON report", string(reportBytes), secrets)
+	})
+}
+
+func assertSecretsAbsent(t *testing.T, outputName, output string, secrets []string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if strings.Contains(output, secret) {
+			t.Errorf("%s contains credential sentinel %q", outputName, secret)
+		}
+	}
+}
+
+func TestCLI_InvalidURLFailureRedactsSensitiveQuery(t *testing.T) {
+	const secret = "SECRET_QUERY_ZETA_444"
+	temporaryDirectory := t.TempDir()
+	configPath := filepath.Join(temporaryDirectory, "invalid-url.yaml")
+	manifest := `schema_version: 1
+name: invalid-url-secret-redaction
+request:
+  url: http://127.0.0.1/%zz?client_secret=` + secret + `
+  method: GET
+load:
+  model: closed
+  users: 1
+  duration: 1s
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+		t.Fatalf("failed to write malformed URL manifest: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := executeContext(context.Background(), []string{"validate", "--config", configPath}, &stdout, &stderr)
+	if exitCode != core.ExitCodeValidationFailure {
+		t.Fatalf("exit code = %d, want %d", exitCode, core.ExitCodeValidationFailure)
+	}
+	combinedOutput := stdout.String() + stderr.String()
+	if strings.Contains(combinedOutput, secret) {
+		t.Fatalf("invalid URL failure output leaked secret: %s", combinedOutput)
+	}
+	if !strings.Contains(combinedOutput, config.RedactedPlaceholder) {
+		t.Errorf("invalid URL failure output = %q, want redaction placeholder", combinedOutput)
+	}
+}
+
+func TestCLI_InvalidURLFailureRedactsUsernameOnlyUserInfo(t *testing.T) {
+	const secretUsername = "SECRET_USER_ALPHA_111"
+	temporaryDirectory := t.TempDir()
+	configPath := filepath.Join(temporaryDirectory, "invalid-userinfo-url.yaml")
+	manifest := `schema_version: 1
+name: invalid-userinfo-secret-redaction
+request:
+  url: http://` + secretUsername + `@127.0.0.1/%zz
+  method: GET
+load:
+  model: closed
+  users: 1
+  duration: 1s
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+`
+	if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+		t.Fatalf("failed to write malformed userinfo URL manifest: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := executeContext(context.Background(), []string{"validate", "--config", configPath}, &stdout, &stderr)
+	if exitCode != core.ExitCodeValidationFailure {
+		t.Fatalf("exit code = %d, want %d", exitCode, core.ExitCodeValidationFailure)
+	}
+	combinedOutput := stdout.String() + stderr.String()
+	if strings.Contains(combinedOutput, secretUsername) {
+		t.Fatalf("invalid username-only userinfo output leaked secret: %s", combinedOutput)
+	}
+	if !strings.Contains(combinedOutput, config.RedactedPlaceholder) {
+		t.Errorf("invalid username-only userinfo output = %q, want redaction placeholder", combinedOutput)
 	}
 }

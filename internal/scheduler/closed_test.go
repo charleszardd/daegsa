@@ -2,18 +2,27 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/charleszardd/daegsa/internal/auth"
 	"github.com/charleszardd/daegsa/internal/clock"
+	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
 	"github.com/charleszardd/daegsa/internal/executor"
 	"github.com/charleszardd/daegsa/internal/plan"
 	"github.com/charleszardd/daegsa/internal/testtarget"
 )
+
+const schedulerContractTimeout = 3 * time.Second
 
 func createTestPlan(targetURL string, users int64, duration, thinkTime, gracefulStop time.Duration) *plan.Plan {
 	parsed, _ := url.Parse(targetURL)
@@ -289,5 +298,215 @@ func TestClosedScheduler_ConcurrencyInvariant(t *testing.T) {
 	if maxConcurrency.Load() > users {
 		t.Errorf("concurrency invariant violated: max concurrency %d > %d users",
 			maxConcurrency.Load(), users)
+	}
+}
+
+func TestClosedScheduler_TokenPool_Deterministic(t *testing.T) {
+	tokens := []string{"token-alpha", "token-beta", "token-gamma"}
+	const users = 6
+
+	var requestMu sync.Mutex
+	observedWorkerTokens := make(map[int]string, users)
+	validationErrors := make(chan string, users)
+	firstWaveArrived := make(chan struct{})
+	var firstWaveOnce sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		workerCookie, cookieErr := request.Cookie("worker_id")
+		if cookieErr != nil {
+			validationErrors <- "missing VU identity cookie: " + cookieErr.Error()
+			<-request.Context().Done()
+			return
+		}
+		workerID, parseErr := strconv.Atoi(workerCookie.Value)
+		if parseErr != nil || workerID < 0 || workerID >= users {
+			validationErrors <- "invalid VU identity cookie " + workerCookie.Value
+			<-request.Context().Done()
+			return
+		}
+		expectedToken := tokens[workerID%len(tokens)]
+		if token != expectedToken {
+			validationErrors <- fmt.Sprintf("VU %d token = %q, want %q", workerID, token, expectedToken)
+			<-request.Context().Done()
+			return
+		}
+
+		requestMu.Lock()
+		observedWorkerTokens[workerID] = token
+		if len(observedWorkerTokens) == users {
+			firstWaveOnce.Do(func() { close(firstWaveArrived) })
+		}
+		requestMu.Unlock()
+
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	authenticator, err := auth.NewAuthenticator(&config.AuthConfig{
+		Type:      config.AuthTypeTokenPool,
+		TokenPool: tokens,
+	})
+	if err != nil {
+		t.Fatalf("failed to create authenticator: %v", err)
+	}
+
+	p := createTestPlan(server.URL, users, 5*time.Second, 0, 1*time.Second)
+	p.Authenticator = authenticator
+	p.KnownSecrets = tokens
+	jarManager, jarErr := auth.NewVUJarManager(true, users)
+	if jarErr != nil {
+		t.Fatalf("failed to create worker identity jars: %v", jarErr)
+	}
+	parsedTargetURL, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("failed to parse target URL: %v", parseErr)
+	}
+	for workerID := 0; workerID < users; workerID++ {
+		jarManager.GetJar(workerID).SetCookies(parsedTargetURL, []*http.Cookie{{
+			Name:  "worker_id",
+			Value: strconv.Itoa(workerID),
+			Path:  "/",
+		}})
+	}
+	p.JarManager = jarManager
+	p.CookieJarEnabled = true
+	exec, err := executor.NewHTTPExecutor(p)
+	if err != nil {
+		t.Fatalf("failed to create http executor: %v", err)
+	}
+	defer exec.Close()
+
+	scheduler, err := NewClosedScheduler(p, exec, clock.NewRealClock())
+	if err != nil {
+		t.Fatalf("failed to create closed scheduler: %v", err)
+	}
+
+	runContext, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, _, runErr := scheduler.Run(runContext)
+		runDone <- runErr
+	}()
+
+	select {
+	case <-firstWaveArrived:
+		cancelRun()
+	case validationErr := <-validationErrors:
+		cancelRun()
+		t.Fatal(validationErr)
+	case <-time.After(schedulerContractTimeout):
+		cancelRun()
+		t.Fatal("timed out waiting for every closed-model VU to issue its first request")
+	}
+
+	if runErr := <-runDone; runErr != nil {
+		t.Fatalf("scheduler run failed: %v", runErr)
+	}
+
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	for workerID := 0; workerID < users; workerID++ {
+		expectedToken := tokens[workerID%len(tokens)]
+		if got := observedWorkerTokens[workerID]; got != expectedToken {
+			t.Errorf("VU %d token = %q, want %q", workerID, got, expectedToken)
+		}
+	}
+}
+
+func TestClosedScheduler_CookieJar_Isolation(t *testing.T) {
+	const users = 5
+	tokens := []string{"vu-0", "vu-1", "vu-2", "vu-3", "vu-4"}
+
+	var stateMu sync.Mutex
+	persistedSessions := make(map[string]bool, users)
+	allSessionsPersisted := make(chan struct{})
+	var allSessionsOnce sync.Once
+	validationErrors := make(chan string, users)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		expectedSession := "session-" + token
+		sessionCookie, cookieErr := request.Cookie("session")
+		if cookieErr == http.ErrNoCookie {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: expectedSession, Path: "/"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if cookieErr != nil {
+			validationErrors <- cookieErr.Error()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if sessionCookie.Value != expectedSession {
+			validationErrors <- "token " + token + " received another VU's session cookie"
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		stateMu.Lock()
+		persistedSessions[token] = true
+		if len(persistedSessions) == users {
+			allSessionsOnce.Do(func() { close(allSessionsPersisted) })
+		}
+		stateMu.Unlock()
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	authenticator, err := auth.NewAuthenticator(&config.AuthConfig{
+		Type:      config.AuthTypeTokenPool,
+		TokenPool: tokens,
+	})
+	if err != nil {
+		t.Fatalf("failed to create authenticator: %v", err)
+	}
+	jarManager, err := auth.NewVUJarManager(true, users)
+	if err != nil {
+		t.Fatalf("failed to create cookie jar manager: %v", err)
+	}
+
+	p := createTestPlan(server.URL, users, 5*time.Second, 0, 1*time.Second)
+	p.Authenticator = authenticator
+	p.KnownSecrets = tokens
+	p.JarManager = jarManager
+	p.CookieJarEnabled = true
+
+	exec, err := executor.NewHTTPExecutor(p)
+	if err != nil {
+		t.Fatalf("failed to create http executor: %v", err)
+	}
+	defer exec.Close()
+
+	scheduler, err := NewClosedScheduler(p, exec, clock.NewRealClock())
+	if err != nil {
+		t.Fatalf("failed to create closed scheduler: %v", err)
+	}
+
+	runContext, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		_, _, runErr := scheduler.Run(runContext)
+		runDone <- runErr
+	}()
+
+	select {
+	case <-allSessionsPersisted:
+		cancelRun()
+	case validationErr := <-validationErrors:
+		cancelRun()
+		t.Fatal(validationErr)
+	case <-time.After(schedulerContractTimeout):
+		cancelRun()
+		t.Fatal("timed out waiting for all VUs to persist and return isolated session cookies")
+	}
+
+	if runErr := <-runDone; runErr != nil {
+		t.Fatalf("scheduler run failed: %v", runErr)
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if len(persistedSessions) != users {
+		t.Fatalf("persisted session count = %d, want %d", len(persistedSessions), users)
 	}
 }

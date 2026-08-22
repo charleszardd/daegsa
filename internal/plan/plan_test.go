@@ -182,3 +182,74 @@ func TestBuildPlan_ThresholdsImmutability(t *testing.T) {
 		t.Errorf("MaxInFlight = %d, want 50", evalCtx.MaxInFlight)
 	}
 }
+
+func TestBuildPlan_AuthIntegration(t *testing.T) {
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Name:          "auth-plan-integration",
+		Request: config.RequestConfig{
+			URL:               "https://api.example.com/items",
+			Method:            "GET",
+			ResponseBodyLimit: "1MiB",
+		},
+		Load: config.LoadConfig{
+			Model:    core.WorkloadModelClosed,
+			Users:    5,
+			Duration: config.Duration(10 * time.Second),
+		},
+		Auth: config.AuthConfig{
+			Type:       config.AuthTypeTokenPool,
+			TokenPool:  []string{"secret_pool_tok_1", "secret_pool_tok_2", "secret_pool_tok_3"},
+			HeaderName: "X-API-Token",
+			CookieJar:  true,
+		},
+	}
+
+	targetURL, _ := url.Parse("https://api.example.com/items")
+	preflight := &safety.PreflightResult{
+		TargetURL:   targetURL,
+		Method:      "GET",
+		ResolvedIPs: []net.IP{net.ParseIP("127.0.0.1")},
+		Authorized:  true,
+	}
+
+	p, err := BuildPlan(cfg, preflight)
+	if err != nil {
+		t.Fatalf("BuildPlan failed: %v", err)
+	}
+
+	if p.AuthType != config.AuthTypeTokenPool {
+		t.Errorf("expected AuthType 'token_pool', got %q", p.AuthType)
+	}
+	if p.AuthHeaderName != "X-API-Token" {
+		t.Errorf("expected AuthHeaderName 'X-API-Token', got %q", p.AuthHeaderName)
+	}
+	if !p.CookieJarEnabled {
+		t.Errorf("expected CookieJarEnabled true")
+	}
+	if p.JarManager == nil || !p.JarManager.Enabled() {
+		t.Errorf("expected active JarManager in Plan")
+	}
+	if p.Authenticator == nil || p.Authenticator.TokenCount() != 3 {
+		t.Errorf("expected Authenticator with 3 tokens")
+	}
+
+	// Verify known secrets contains all pool tokens
+	if len(p.KnownSecrets) != 3 {
+		t.Errorf("expected 3 known secrets, got %d", len(p.KnownSecrets))
+	}
+
+	summary := FormatPlanSummary(p)
+	if strings.Contains(summary, "secret_pool_tok_1") || strings.Contains(summary, "secret_pool_tok_2") {
+		t.Errorf("CRITICAL: plan summary leaked token: %s", summary)
+	}
+	if !strings.Contains(summary, "Auth Mode:            token_pool") {
+		t.Errorf("missing Auth Mode in summary: %s", summary)
+	}
+	if !strings.Contains(summary, "Token Pool Size:      3") {
+		t.Errorf("missing Token Pool Size in summary: %s", summary)
+	}
+	if !strings.Contains(summary, "Cookie Jar Isolation: enabled") {
+		t.Errorf("missing Cookie Jar Isolation in summary: %s", summary)
+	}
+}

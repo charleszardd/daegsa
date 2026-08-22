@@ -31,7 +31,7 @@ func newRunCmd() *cobra.Command {
 
 			// Check --dry-run
 			if flags.dryRun {
-				fmt.Print(plan.FormatPlanSummary(p))
+				fmt.Fprint(cmd.OutOrStdout(), plan.FormatPlanSummary(p))
 				return nil
 			}
 
@@ -87,7 +87,7 @@ func newRunCmd() *cobra.Command {
 			rep := report.BuildReport(p, agg, health, startTime, endTime, incomplete, thresholdResults)
 
 			// Print terminal report (§13)
-			fmt.Print(report.FormatTerminalReport(rep, p))
+			fmt.Fprint(cmd.OutOrStdout(), report.FormatTerminalReport(rep, p))
 
 			// Write JSON report if requested (§13)
 			if flags.outputJSON != "" {

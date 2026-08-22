@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,5 +303,100 @@ func TestTargetServer_RecordedRequests(t *testing.T) {
 	}
 	if r.Header.Get("X-Custom-Header") != "test-val" {
 		t.Errorf("recorded header = %q, want 'test-val'", r.Header.Get("X-Custom-Header"))
+	}
+}
+
+func TestTargetServer_AuthEndpoints(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	client := http.DefaultClient
+
+	// 1. Bearer endpoint
+	// Without token -> 401
+	resp, err := client.Get(ts.URL() + "/auth/bearer")
+	if err != nil {
+		t.Fatalf("GET /auth/bearer failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without bearer token, got %d", resp.StatusCode)
+	}
+
+	// With token -> 200
+	reqBearer, _ := http.NewRequest("GET", ts.URL()+"/auth/bearer", nil)
+	reqBearer.Header.Set("Authorization", "Bearer valid-token-123")
+	resp, err = client.Do(reqBearer)
+	if err != nil {
+		t.Fatalf("GET /auth/bearer with valid token failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with bearer token, got %d", resp.StatusCode)
+	}
+
+	// 2. Custom Header endpoint
+	// Without header -> 401
+	resp, err = client.Get(ts.URL() + "/auth/header")
+	if err != nil {
+		t.Fatalf("GET /auth/header failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without custom header, got %d", resp.StatusCode)
+	}
+
+	// With header -> 200
+	reqHeader, _ := http.NewRequest("GET", ts.URL()+"/auth/header", nil)
+	reqHeader.Header.Set("X-API-Key", "apikey_999")
+	resp, err = client.Do(reqHeader)
+	if err != nil {
+		t.Fatalf("GET /auth/header with header failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with custom header, got %d", resp.StatusCode)
+	}
+
+	// 3. Basic auth endpoint
+	// Without basic auth -> 401
+	resp, err = client.Get(ts.URL() + "/auth/basic")
+	if err != nil {
+		t.Fatalf("GET /auth/basic failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without basic auth, got %d", resp.StatusCode)
+	}
+
+	// With basic auth -> 200
+	reqBasic, _ := http.NewRequest("GET", ts.URL()+"/auth/basic", nil)
+	reqBasic.SetBasicAuth("admin", "pass")
+	resp, err = client.Do(reqBasic)
+	if err != nil {
+		t.Fatalf("GET /auth/basic with credentials failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with basic auth, got %d", resp.StatusCode)
+	}
+
+	// 4. Token pool endpoint
+	reqPool, _ := http.NewRequest("GET", ts.URL()+"/auth/token-pool", nil)
+	reqPool.Header.Set("Authorization", "Bearer pool-tok-1")
+	resp, err = client.Do(reqPool)
+	if err != nil {
+		t.Fatalf("GET /auth/token-pool failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for token pool endpoint, got %d", resp.StatusCode)
+	}
+	if strings.Contains(string(body), "pool-tok-1") {
+		t.Errorf("token-pool response leaked the raw token: %s", string(body))
+	}
+	if !strings.Contains(string(body), "token_hash") {
+		t.Errorf("expected response to contain a non-secret token_hash, got %s", string(body))
 	}
 }

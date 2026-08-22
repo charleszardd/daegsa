@@ -37,8 +37,31 @@ func validateReportJSONStructure(t *testing.T, data []byte) {
 		"latency":               true,
 		"rate_limits":           true,
 		"generator_health":      true,
+		"auth":                  true,
 		"thresholds":            true,
 		"incomplete":            true,
+	}
+
+	requiredTopLevel := []string{
+		"report_schema_version",
+		"daegsa_version",
+		"commit",
+		"build_date",
+		"os",
+		"arch",
+		"config_fingerprint",
+		"start_time_utc",
+		"end_time_utc",
+		"duration_ms",
+		"workload_model",
+		"request_counts",
+		"outcomes",
+		"status_codes",
+		"latency",
+		"rate_limits",
+		"generator_health",
+		"thresholds",
+		"incomplete",
 	}
 
 	// 1. Verify no unexpected top-level fields (additionalProperties: false)
@@ -49,7 +72,7 @@ func validateReportJSONStructure(t *testing.T, data []byte) {
 	}
 
 	// 2. Verify all required top-level fields are present
-	for reqKey := range allowedTopLevel {
+	for _, reqKey := range requiredTopLevel {
 		if _, exists := root[reqKey]; !exists {
 			t.Errorf("schema violation: missing required top-level field %q", reqKey)
 		}
@@ -110,7 +133,7 @@ func validateReportJSONStructure(t *testing.T, data []byte) {
 	}
 
 	// 8. Verify thresholds array items
-	thresholds, ok := root["thresholds"].( []interface{})
+	thresholds, ok := root["thresholds"].([]interface{})
 	if !ok {
 		t.Fatalf("schema violation: thresholds is not an array")
 	}
@@ -404,5 +427,98 @@ func TestReport_SchemaMatchesFileSchema(t *testing.T) {
 
 	if schema["$schema"] != "http://json-schema.org/draft-07/schema#" {
 		t.Errorf("expected draft-07 schema, got %v", schema["$schema"])
+	}
+}
+
+func TestReport_Serialization_WithAuth(t *testing.T) {
+	startTime := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	endTime := startTime.Add(10 * time.Second)
+
+	rep := report.Report{
+		ReportSchemaVersion: 1,
+		DaegsaVersion:       "0.1.0",
+		Commit:              "abcd123",
+		BuildDate:           "2026-08-22",
+		OS:                  "windows",
+		Arch:                "amd64",
+		ConfigFingerprint:   "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		StartTimeUTC:        startTime,
+		EndTimeUTC:          endTime,
+		DurationMS:          10000,
+		WorkloadModel:       core.WorkloadModelClosed,
+		RequestCounts: report.RequestCounts{
+			Planned:   100,
+			Scheduled: 100,
+			Started:   100,
+			Completed: 100,
+			Canceled:  0,
+			Dropped:   0,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 100,
+		},
+		StatusCodes: map[string]int64{
+			"200": 100,
+		},
+		Latency: report.LatencySummary{
+			AllCompleted: report.LatencyPercentiles{
+				MinMS:  1.0,
+				MaxMS:  50.0,
+				MeanMS: 10.0,
+				P50MS:  8.0,
+				P90MS:  20.0,
+				P95MS:  30.0,
+				P99MS:  45.0,
+			},
+			ExpectedSuccess: report.LatencyPercentiles{
+				MinMS:  1.0,
+				MaxMS:  50.0,
+				MeanMS: 10.0,
+				P50MS:  8.0,
+				P90MS:  20.0,
+				P95MS:  30.0,
+				P99MS:  45.0,
+			},
+		},
+		RateLimits: report.RateLimitObservations{
+			Observed429Count: 0,
+		},
+		GeneratorHealth: report.GeneratorHealth{
+			CPUMaxPercent:     12.0,
+			GoroutinesPeak:    15,
+			SchedulerLagMaxMS: 0.5,
+		},
+		Auth: &report.AuthReportSummary{
+			AuthMode:         "token_pool",
+			TokenCount:       4,
+			CookieJarEnabled: true,
+		},
+		Thresholds: make([]report.ThresholdResult, 0),
+		Incomplete: false,
+	}
+
+	data, err := rep.ToJSON()
+	if err != nil {
+		t.Fatalf("Report.ToJSON() error: %v", err)
+	}
+
+	validateReportJSONStructure(t, data)
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	authObj, ok := parsed["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected auth object in JSON report")
+	}
+	if authObj["auth_mode"] != "token_pool" {
+		t.Errorf("expected auth_mode='token_pool', got %v", authObj["auth_mode"])
+	}
+	if authObj["token_count"].(float64) != 4 {
+		t.Errorf("expected token_count=4, got %v", authObj["token_count"])
+	}
+	if authObj["cookie_jar_enabled"] != true {
+		t.Errorf("expected cookie_jar_enabled=true, got %v", authObj["cookie_jar_enabled"])
 	}
 }
