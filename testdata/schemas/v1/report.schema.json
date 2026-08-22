@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DAEGSA Report Schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "report_schema_version",
+    "daegsa_version",
+    "commit",
+    "build_date",
+    "os",
+    "arch",
+    "config_fingerprint",
+    "start_time_utc",
+    "end_time_utc",
+    "duration_ms",
+    "workload_model",
+    "request_counts",
+    "outcomes",
+    "status_codes",
+    "latency",
+    "rate_limits",
+    "generator_health",
+    "thresholds",
+    "incomplete"
+  ],
+  "properties": {
+    "report_schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "daegsa_version": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "build_date": {
+      "type": "string"
+    },
+    "os": {
+      "type": "string"
+    },
+    "arch": {
+      "type": "string"
+    },
+    "config_fingerprint": {
+      "type": "string"
+    },
+    "start_time_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_time_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "workload_model": {
+      "type": "string",
+      "enum": ["open", "closed"]
+    },
+    "request_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planned", "scheduled", "started", "completed", "canceled", "dropped"],
+      "properties": {
+        "planned": { "type": "integer", "minimum": 0 },
+        "scheduled": { "type": "integer", "minimum": 0 },
+        "started": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
+        "canceled": { "type": "integer", "minimum": 0 },
+        "dropped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "status_codes": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all_completed", "expected_success"],
+      "properties": {
+        "all_completed": { "$ref": "#/definitions/LatencyPercentiles" },
+        "expected_success": { "$ref": "#/definitions/LatencyPercentiles" }
+      }
+    },
+    "rate_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_429_count"],
+      "properties": {
+        "observed_429_count": { "type": "integer", "minimum": 0 },
+        "retry_after_samples": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rate_limit_headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "limit": { "type": "string" },
+              "remaining": { "type": "string" },
+              "reset": { "type": "string" },
+              "policy": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "generator_health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_max_percent", "goroutines_peak", "scheduler_lag_max_ms"],
+      "properties": {
+        "cpu_max_percent": { "type": "number" },
+        "goroutines_peak": { "type": "integer", "minimum": 0 },
+        "scheduler_lag_max_ms": { "type": "number" },
+        "saturation_warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expression", "target", "observed", "passed"],
+        "properties": {
+          "expression": { "type": "string" },
+          "target": { "type": "string" },
+          "observed": { "type": "string" },
+          "passed": { "type": "boolean" }
+        }
+      }
+    },
+    "incomplete": {
+      "type": "boolean"
+    }
+  },
+  "definitions": {
+    "LatencyPercentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_ms", "max_ms", "mean_ms", "p50_ms", "p90_ms", "p95_ms", "p99_ms"],
+      "properties": {
+        "min_ms": { "type": "number", "minimum": 0 },
+        "max_ms": { "type": "number", "minimum": 0 },
+        "mean_ms": { "type": "number", "minimum": 0 },
+        "p50_ms": { "type": "number", "minimum": 0 },
+        "p90_ms": { "type": "number", "minimum": 0 },
+        "p95_ms": { "type": "number", "minimum": 0 },
+        "p99_ms": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

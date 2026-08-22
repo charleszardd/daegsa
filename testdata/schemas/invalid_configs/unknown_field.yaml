@@ -1,0 +1,11 @@
+schema_version: 1
+name: test-unknown-field
+unrecognized_property: true
+request:
+  url: http://127.0.0.1:8080/api/test
+  method: GET
+load:
+  model: open
+  rate: 50
+  duration: 10s
+  max_in_flight: 100
