@@ -41,6 +41,10 @@ spike, soak, and rate-limit testing with explicit open and closed workload model
 	rootCmd.AddCommand(newDoctorCmd())
 	rootCmd.AddCommand(newSelfTestCmd())
 
+	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	}
+
 	SetupColorfulHelp(rootCmd)
 	for _, sub := range rootCmd.Commands() {
 		SetupColorfulHelp(sub)
