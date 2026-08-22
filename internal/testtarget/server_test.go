@@ -1,0 +1,306 @@
+package testtarget_test
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/charleszardd/daegsa/internal/clock"
+	"github.com/charleszardd/daegsa/internal/testtarget"
+)
+
+func TestTargetServer_StatusCodes(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	codes := []int{200, 204, 400, 404, 500, 503, 429}
+	for _, code := range codes {
+		// Test via query param
+		resp, err := http.Get(ts.URL() + "/test?status=" + strconv.Itoa(code))
+		if err != nil {
+			t.Fatalf("GET /test?status=%d failed: %v", code, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != code {
+			t.Errorf("GET /test?status=%d got status %d", code, resp.StatusCode)
+		}
+
+		// Test via header
+		req, _ := http.NewRequest("GET", ts.URL()+"/test", nil)
+		req.Header.Set("X-Target-Status", strconv.Itoa(code))
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /test with X-Target-Status=%d failed: %v", code, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != code {
+			t.Errorf("X-Target-Status=%d got status %d", code, resp.StatusCode)
+		}
+	}
+}
+
+func TestTargetServer_Delays(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	start := time.Now()
+	resp, err := http.Get(ts.URL() + "/test?delay=50ms")
+	if err != nil {
+		t.Fatalf("GET /test?delay=50ms failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	elapsed := time.Since(start)
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("expected delay of at least 40ms, got %v", elapsed)
+	}
+}
+
+func TestTargetServer_PayloadSizes(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	sizes := []int64{0, 1024, 65536, 1048576}
+	for _, size := range sizes {
+		resp, err := http.Get(ts.URL() + "/test?bytes=" + strconv.FormatInt(size, 10))
+		if err != nil {
+			t.Fatalf("GET /test?bytes=%d failed: %v", size, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatalf("reading body of size %d failed: %v", size, err)
+		}
+		if int64(len(body)) != size {
+			t.Errorf("expected body length %d, got %d", size, len(body))
+		}
+	}
+}
+
+func TestTargetServer_Redirects(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	// Client without auto-redirects
+	noRedirectClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Same-origin redirect
+	resp, err := noRedirectClient.Get(ts.URL() + "/start?redirect_path=/target")
+	if err != nil {
+		t.Fatalf("GET /start?redirect_path=/target failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("redirect status = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/target" {
+		t.Errorf("Location header = %q, want '/target'", loc)
+	}
+
+	// Cross-origin redirect
+	resp, err = noRedirectClient.Get(ts.URL() + "/start?redirect_url=http://external.example.com/dest")
+	if err != nil {
+		t.Fatalf("GET /start?redirect_url failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("redirect status = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "http://external.example.com/dest" {
+		t.Errorf("Location header = %q, want 'http://external.example.com/dest'", loc)
+	}
+}
+
+func TestTargetServer_AbruptDrops(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	// Immediate drop
+	resp, err := http.Get(ts.URL() + "/test?drop=immediate")
+	if err == nil {
+		// If read succeeds, reading the body must fail
+		_, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr == nil {
+			t.Errorf("expected error on immediate drop, got nil")
+		}
+	}
+
+	// Midway drop
+	resp, err = http.Get(ts.URL() + "/test?drop=midway&after_bytes=50")
+	if err == nil {
+		buf := make([]byte, 1000)
+		n, readErr := resp.Body.Read(buf)
+		_ = resp.Body.Close()
+		if readErr == nil && n >= 1000 {
+			t.Errorf("expected EOF or abrupt disconnect on midway drop, read %d bytes", n)
+		}
+	}
+}
+
+func TestTargetServer_TimeoutHang(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL()+"/test?hang=true", nil)
+	_, err := http.DefaultClient.Do(req)
+	if err == nil {
+		t.Fatalf("expected timeout error on hang request, got nil")
+	}
+}
+
+func TestTargetServer_Cookies(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	// Set cookies
+	setURL := ts.URL() + "/cookies/set?session_id=secret123&theme=dark"
+	resp, err := client.Get(setURL)
+	if err != nil {
+		t.Fatalf("GET /cookies/set failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// Inspect cookies
+	inspectURL := ts.URL() + "/cookies/inspect"
+	resp, err = client.Get(inspectURL)
+	if err != nil {
+		t.Fatalf("GET /cookies/inspect failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var cookies map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&cookies); err != nil {
+		t.Fatalf("failed to decode cookies JSON: %v", err)
+	}
+
+	if cookies["session_id"] != "secret123" {
+		t.Errorf("session_id cookie = %q, want 'secret123'", cookies["session_id"])
+	}
+	if cookies["theme"] != "dark" {
+		t.Errorf("theme cookie = %q, want 'dark'", cookies["theme"])
+	}
+}
+
+func TestTargetServer_RateLimiting(t *testing.T) {
+	mockClock := clock.NewControllableClock(time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC))
+	rl := testtarget.NewRateLimiter(testtarget.RateLimiterConfig{
+		RequestsPerWindow: 2,
+		Window:            10 * time.Second,
+		HeaderStyle:       testtarget.RateLimitHeaderStyleAll,
+		Clock:             mockClock,
+	})
+
+	ts := testtarget.NewServer(
+		testtarget.WithRateLimiter(rl),
+		testtarget.WithClock(mockClock),
+	)
+	defer ts.Close()
+
+	// 1st request: allowed
+	resp, err := http.Get(ts.URL() + "/api/resource")
+	if err != nil {
+		t.Fatalf("1st request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("1st request status = %d, want 200", resp.StatusCode)
+	}
+
+	// 2nd request: allowed
+	resp, err = http.Get(ts.URL() + "/api/resource")
+	if err != nil {
+		t.Fatalf("2nd request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("2nd request status = %d, want 200", resp.StatusCode)
+	}
+
+	// 3rd request: rate-limited (429)
+	resp, err = http.Get(ts.URL() + "/api/resource")
+	if err != nil {
+		t.Fatalf("3rd request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("3rd request status = %d, want 429", resp.StatusCode)
+	}
+
+	// Check rate limit headers
+	if retryAfter := resp.Header.Get("Retry-After"); retryAfter == "" {
+		t.Errorf("missing Retry-After header on 429 response")
+	}
+	if limit := resp.Header.Get("RateLimit-Limit"); limit != "2" {
+		t.Errorf("RateLimit-Limit = %q, want '2'", limit)
+	}
+	if remaining := resp.Header.Get("RateLimit-Remaining"); remaining != "0" {
+		t.Errorf("RateLimit-Remaining = %q, want '0'", remaining)
+	}
+	if xLimit := resp.Header.Get("X-RateLimit-Limit"); xLimit != "2" {
+		t.Errorf("X-RateLimit-Limit = %q, want '2'", xLimit)
+	}
+
+	// Advance virtual time past the rate limit window
+	mockClock.Advance(11 * time.Second)
+
+	// 4th request: quota reset, allowed again
+	resp, err = http.Get(ts.URL() + "/api/resource")
+	if err != nil {
+		t.Fatalf("4th request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("4th request status after window reset = %d, want 200", resp.StatusCode)
+	}
+
+	// Verify request recording
+	recorded := ts.RecordedRequests()
+	if len(recorded) != 4 {
+		t.Errorf("recorded requests count = %d, want 4", len(recorded))
+	}
+}
+
+func TestTargetServer_RecordedRequests(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL()+"/items?foo=bar", nil)
+	req.Header.Set("X-Custom-Header", "test-val")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	recorded := ts.RecordedRequests()
+	if len(recorded) != 1 {
+		t.Fatalf("recorded requests count = %d, want 1", len(recorded))
+	}
+
+	r := recorded[0]
+	if r.Method != "POST" {
+		t.Errorf("recorded Method = %q, want 'POST'", r.Method)
+	}
+	if r.Path != "/items" {
+		t.Errorf("recorded Path = %q, want '/items'", r.Path)
+	}
+	if r.Header.Get("X-Custom-Header") != "test-val" {
+		t.Errorf("recorded header = %q, want 'test-val'", r.Header.Get("X-Custom-Header"))
+	}
+}

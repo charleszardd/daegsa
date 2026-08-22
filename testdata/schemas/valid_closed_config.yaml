@@ -1,0 +1,31 @@
+schema_version: 1
+name: user-concurrency-baseline
+
+request:
+  url: http://127.0.0.1:8080/api/users
+  method: POST
+  headers:
+    Content-Type: application/json
+  expected_statuses: [200, 201]
+  timeout: 10s
+  response_body_limit: 500KB
+  redirects: none
+
+load:
+  model: closed
+  users: 50
+  duration: 1m
+  graceful_stop: 15s
+  think_time: 250ms
+
+rate_limit:
+  treat_429_as_expected: true
+
+thresholds:
+  p95: "<= 800ms"
+  http_error_rate: "<= 2%"
+
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+  allow_non_idempotent: true

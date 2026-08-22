@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DAEGSA Configuration Schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "request",
+    "load"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version, must be 1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier for the load test"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "method"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "expected_statuses": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "response_body_limit": {
+          "type": "string"
+        },
+        "redirects": {
+          "type": "string",
+          "enum": ["same-origin", "none", "all"]
+        }
+      }
+    },
+    "load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "duration"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": ["open", "closed"]
+        },
+        "rate": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "time_unit": {
+          "type": "string"
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "duration": {
+          "type": "string"
+        },
+        "graceful_stop": {
+          "type": "string"
+        },
+        "users": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "think_time": {
+          "type": "string"
+        }
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "treat_429_as_expected": {
+          "type": "boolean"
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_non_idempotent": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
