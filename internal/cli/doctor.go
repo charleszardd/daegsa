@@ -19,17 +19,26 @@ func newDoctorCmd() *cobra.Command {
 	var flags doctorFlagValues
 
 	cmd := &cobra.Command{
-		Use:   "doctor",
+		Use:   "doctor [flags]",
 		Short: "Run host environment diagnostics and health checks",
-		Long: `Run comprehensive diagnostic checks against the host environment:
-  - Timer and monotonic clock precision
-  - Loopback and local DNS resolution
-  - TLS handshake and system root CA certificates
-  - TCP socket allocation and ephemeral port capacity
+		Long: `Run comprehensive diagnostic checks against the host environment to ensure accurate
+load generation and prevent generator bottleneck artifacts:
+  - Timer and monotonic clock precision (measures timer tick resolution and sleep deviation)
+  - Loopback and local DNS resolution (checks latency and resolution stability)
+  - TLS handshake and system root CA certificates (verifies TLS 1.2/1.3 cipher suite negotiation)
+  - TCP socket allocation and ephemeral port capacity (probes socket creation headroom)
   - Host CPU cores, GOMAXPROCS, and memory headroom
 
 Returns exit code 0 if all checks pass or warn, and exit code 3 (RUNTIME_FAILURE)
 if any critical system check fails.`,
+		Example: `  # 1. Run standard host diagnostics with formatted terminal output:
+  daegsa doctor
+
+  # 2. Run diagnostics with verbose details and metric measurements:
+  daegsa doctor --verbose
+
+  # 3. Export diagnostics in JSON format for automated CI/monitoring:
+  daegsa doctor --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := doctor.Options{
 				Verbose: flags.verbose,

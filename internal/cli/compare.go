@@ -10,7 +10,18 @@ import (
 
 func newCompareCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "compare baseline.json candidate.json", Short: "Compare two complete DAEGSA reports",
+		Use:   "compare <baseline.json> <candidate.json>",
+		Short: "Compare two complete DAEGSA reports for performance regressions",
+		Long: `Compare two complete DAEGSA JSON reports (baseline vs candidate) to detect
+latency regressions, throughput changes, error rate spikes, and threshold transitions in CI.
+
+Analyzes p50/p90/p95/p99/max latency deltas, completed throughput differences, 429 response
+counts, dropped requests, and threshold transition statuses (pass-to-fail, fail-to-pass).`,
+		Example: `  # 1. Compare a baseline report with a new test run:
+  daegsa compare baseline.json candidate.json
+
+  # 2. Compare performance reports across staging and production:
+  daegsa compare report-v1.0.json report-v1.1.json`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 2 {
 				return &CLIExitError{Code: core.ExitCodeValidationFailure, Err: fmt.Errorf("compare requires baseline and candidate report paths")}

@@ -15,9 +15,19 @@ func newValidateCmd() *cobra.Command {
 	var flags flagValues
 
 	cmd := &cobra.Command{
-		Use:   "validate",
+		Use:   "validate [flags]",
 		Short: "Validate configuration syntax, environment placeholders, and safety preflight",
-		Long:  "Validate configuration syntax, environment placeholders, and safety preflight without sending test traffic.",
+		Long: `Validate YAML test configuration syntax, resolve environment placeholders (${VAR}),
+and execute preflight safety checks (host allowlists, method safeguards, DNS resolution)
+without sending any test traffic.`,
+		Example: `  # 1. Validate a YAML configuration file:
+  daegsa validate --config examples/open-api-capacity.yaml
+
+  # 2. Validate with CLI parameter overrides:
+  daegsa validate --config examples/open-api-capacity.yaml --rate 200 --duration 1m
+
+  # 3. Validate ad-hoc command line parameters:
+  daegsa validate --url "https://api.example.com/items" --model open --rate 50 --duration 30s`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _, p, err := loadAndPreflightConfig(cmd.Context(), &flags)
 			if err != nil {

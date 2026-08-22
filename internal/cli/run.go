@@ -20,9 +20,30 @@ func newRunCmd() *cobra.Command {
 	var flags flagValues
 
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "run [flags]",
 		Short: "Execute load, rate-limit, or capacity test",
-		Long:  "Execute load, rate-limit, or capacity test against target HTTP endpoint.",
+		Long: `Execute load, rate-limit, or capacity test against a target HTTP endpoint.
+
+Supports both Open Arrival-Rate (fixed RPS arrival pacing) and Closed VU Concurrency
+(virtual users with think time) models, multi-step scenario workflows, profile ramps,
+and automated threshold validation with rich terminal and JSON reporting.`,
+		Example: `  # 1. Open arrival-rate test (50 req/sec for 30s):
+  daegsa run --url "https://api.example.com/items" --model open --rate 50 --duration 30s
+
+  # 2. Closed concurrency test (10 Virtual Users for 1m with 50ms think time):
+  daegsa run --url "https://api.example.com/items" --model closed --users 10 --duration 1m
+
+  # 3. Declarative YAML load test with JSON report output:
+  daegsa run --config examples/open-api-capacity.yaml --output-json result.json
+
+  # 4. Multi-step authenticated scenario test:
+  daegsa run --config examples/multi-step-scenario.yaml
+
+  # 5. Dry-run inspection (validate and inspect execution plan without sending traffic):
+  daegsa run --config examples/open-api-capacity.yaml --dry-run
+
+  # 6. Authorize non-idempotent/destructive HTTP methods (POST, PUT, DELETE):
+  daegsa run --url "https://api.example.com/items" --method POST --allow-destructive --model open --rate 10 --duration 10s`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _, p, err := loadAndPreflightConfig(cmd.Context(), &flags)
 			if err != nil {

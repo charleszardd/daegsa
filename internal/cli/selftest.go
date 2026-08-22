@@ -19,7 +19,7 @@ func newSelfTestCmd() *cobra.Command {
 	var flags selfTestFlagValues
 
 	cmd := &cobra.Command{
-		Use:     "self-test",
+		Use:     "self-test [flags]",
 		Aliases: []string{"selftest"},
 		Short:   "Run in-process end-to-end self-tests against an embedded target",
 		Long: `Run comprehensive in-process verification across DAEGSA core engines:
@@ -29,8 +29,17 @@ func newSelfTestCmd() *cobra.Command {
   - Threshold rule evaluation (passing and failing constraints)
   - Terminal reporting and JSON schema serialization
 
+Uses an embedded in-memory HTTP server on loopback without sending any external traffic.
 Returns exit code 0 if all self-tests pass, and exit code 3 (RUNTIME_FAILURE)
 if any subtest encounters an assertion or execution failure.`,
+		Example: `  # 1. Run automated in-process self-tests:
+  daegsa self-test
+
+  # 2. Run self-tests with verbose per-test progress and details:
+  daegsa self-test --verbose
+
+  # 3. Export self-test results in JSON format:
+  daegsa self-test --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := selftest.Options{
 				Verbose: flags.verbose,

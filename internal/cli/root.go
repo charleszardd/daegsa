@@ -41,6 +41,11 @@ spike, soak, and rate-limit testing with explicit open and closed workload model
 	rootCmd.AddCommand(newDoctorCmd())
 	rootCmd.AddCommand(newSelfTestCmd())
 
+	SetupColorfulHelp(rootCmd)
+	for _, sub := range rootCmd.Commands() {
+		SetupColorfulHelp(sub)
+	}
+
 	return rootCmd
 }
 
