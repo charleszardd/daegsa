@@ -974,3 +974,177 @@ safety:
 		t.Errorf("invalid username-only userinfo output = %q, want redaction placeholder", combinedOutput)
 	}
 }
+
+func TestCLI_Run_MultiStepScenario(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "scenario.yaml")
+	reportPath := filepath.Join(tmpDir, "report.json")
+
+	manifest := fmt.Sprintf(`schema_version: 1
+name: cli-scenario-test
+scenario:
+  name: user_session_flow
+  steps:
+    - name: login
+      url: %s/auth/login
+      method: POST
+      body: '{"username":"admin","password":"password"}'
+      expected_statuses: [200]
+      timeout: 5s
+      extract:
+        token:
+          from: json
+          expression: token
+        user_id:
+          from: json
+          expression: user_id
+      on_failure: stop
+    - name: get_items
+      url: %s/api/items
+      method: GET
+      headers:
+        Authorization: "Bearer $${token}"
+        X-User: "$${user_id}"
+      expected_statuses: [200]
+      timeout: 5s
+      think_time: 10ms
+      on_failure: continue
+    - name: logout
+      url: %s/api/logout
+      method: POST
+      expected_statuses: [200]
+      timeout: 5s
+      on_failure: continue
+load:
+  model: closed
+  users: 3
+  think_time: 10ms
+  duration: 300ms
+  graceful_stop: 1s
+thresholds:
+  http_error_rate: "<= 1%%"
+  p95: "<= 500ms"
+  step.login.p95: "<= 300ms"
+  step.get_items.p95: "<= 300ms"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+  allow_non_idempotent: true
+`, server.URL(), server.URL(), server.URL())
+
+	if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+		t.Fatalf("failed to write scenario manifest: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := executeContext(context.Background(), []string{"run", "--config", configPath, "--output-json", reportPath}, &stdout, &stderr)
+	if code != core.ExitCodeSuccess {
+		t.Fatalf("CLI run scenario failed with exit code %d: stderr=%s", code, stderr.String())
+	}
+
+	terminalOut := stdout.String()
+	if !strings.Contains(terminalOut, "SCENARIO: user_session_flow") {
+		t.Errorf("missing scenario banner in stdout: %s", terminalOut)
+	}
+	if !strings.Contains(terminalOut, "login") || !strings.Contains(terminalOut, "get_items") || !strings.Contains(terminalOut, "logout") {
+		t.Errorf("missing step names in stdout: %s", terminalOut)
+	}
+	if !strings.Contains(terminalOut, "TEST RESULT: PASS") {
+		t.Errorf("expected TEST RESULT: PASS in stdout: %s", terminalOut)
+	}
+
+	// Verify report JSON
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("failed to read JSON report: %v", err)
+	}
+
+	var rep struct {
+		Scenario struct {
+			Name       string `json:"name"`
+			Iterations struct {
+				Completed int64 `json:"completed"`
+				Failed    int64 `json:"failed"`
+			} `json:"iterations"`
+			Steps []struct {
+				Name          string `json:"name"`
+				RequestCounts struct {
+					Completed int64 `json:"completed"`
+				} `json:"request_counts"`
+			} `json:"steps"`
+		} `json:"scenario"`
+	}
+	if err := json.Unmarshal(reportBytes, &rep); err != nil {
+		t.Fatalf("failed to unmarshal JSON report: %v", err)
+	}
+
+	if rep.Scenario.Name != "user_session_flow" {
+		t.Errorf("scenario name in JSON = %q, want 'user_session_flow'", rep.Scenario.Name)
+	}
+	if rep.Scenario.Iterations.Completed == 0 {
+		t.Errorf("expected completed scenario iterations > 0")
+	}
+	if len(rep.Scenario.Steps) != 3 {
+		t.Fatalf("expected 3 steps in scenario report, got %d", len(rep.Scenario.Steps))
+	}
+}
+
+func TestCLI_Run_MultiStepScenario_ThresholdFailure(t *testing.T) {
+	server := testtarget.NewServer()
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "scenario_fail.yaml")
+
+	manifest := fmt.Sprintf(`schema_version: 1
+name: cli-scenario-fail-test
+scenario:
+  name: user_session_flow
+  steps:
+    - name: login
+      url: %s/auth/login
+      method: POST
+      body: '{"username":"admin","password":"password"}'
+      expected_statuses: [200]
+      timeout: 5s
+      on_failure: stop
+    - name: get_items
+      url: %s/api/items
+      method: GET
+      expected_statuses: [200]
+      timeout: 5s
+      on_failure: stop
+load:
+  model: closed
+  users: 2
+  duration: 200ms
+thresholds:
+  step.login.p95: "<= 100ms"
+  step.get_items.p95: "<= 0.0001ms"
+safety:
+  allowed_hosts:
+    - 127.0.0.1
+    - localhost
+  allow_non_idempotent: true
+`, server.URL(), server.URL())
+
+	if err := os.WriteFile(configPath, []byte(manifest), 0600); err != nil {
+		t.Fatalf("failed to write scenario manifest: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := executeContext(context.Background(), []string{"run", "--config", configPath}, &stdout, &stderr)
+	if code != core.ExitCodeThresholdFailure {
+		t.Fatalf("expected exit code %d (ExitCodeThresholdFailure), got %d; stderr=%s", core.ExitCodeThresholdFailure, code, stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "step.get_items.p95") {
+		t.Errorf("expected failing step threshold mentioned in stderr: %s", stderr.String())
+	}
+}

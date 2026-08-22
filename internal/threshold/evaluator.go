@@ -3,6 +3,7 @@ package threshold
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 const floatEpsilon = 1e-9
@@ -45,12 +46,12 @@ type ReportResult struct {
 }
 
 // Evaluate evaluates a slice of parsed Threshold rules against a MetricsSnapshot and EvaluationContext (§10).
-//
-// Returns:
-//   - results: detailed slice of Result for each threshold in the input order
-//   - allPassed: true if all evaluated thresholds passed (or if no thresholds were configured)
-//   - err: non-nil only if evaluation encountered an unrecoverable structural error
 func Evaluate(thresholds []*Threshold, snap MetricsSnapshot, evalCtx EvaluationContext) ([]Result, bool, error) {
+	return EvaluateWithSteps(thresholds, snap, nil, evalCtx)
+}
+
+// EvaluateWithSteps evaluates thresholds against root and step-level MetricsSnapshots (§10).
+func EvaluateWithSteps(thresholds []*Threshold, rootSnap MetricsSnapshot, stepSnaps map[string]MetricsSnapshot, evalCtx EvaluationContext) ([]Result, bool, error) {
 	if len(thresholds) == 0 {
 		return make([]Result, 0), true, nil
 	}
@@ -63,7 +64,25 @@ func Evaluate(thresholds []*Threshold, snap MetricsSnapshot, evalCtx EvaluationC
 			continue
 		}
 
-		observedVal, observedFmt := extractObserved(t.MetricName, t.Category, snap, evalCtx)
+		snapToUse := rootSnap
+		metricNameToExtract := t.MetricName
+
+		if t.StepName != "" {
+			if stepSnaps != nil {
+				if sSnap, exists := stepSnaps[t.StepName]; exists {
+					snapToUse = sSnap
+				} else {
+					snapToUse = MetricsSnapshot{}
+				}
+			} else {
+				snapToUse = MetricsSnapshot{}
+			}
+			if idx := strings.LastIndex(t.MetricName, "."); idx != -1 {
+				metricNameToExtract = t.MetricName[idx+1:]
+			}
+		}
+
+		observedVal, observedFmt := extractObserved(metricNameToExtract, t.Category, snapToUse, evalCtx)
 		passed := compareValues(observedVal, t.TargetValue, t.Operator)
 		if !passed {
 			allPassed = false

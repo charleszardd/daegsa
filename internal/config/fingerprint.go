@@ -85,6 +85,38 @@ func cloneConfigSanitized(cfg *Config) *Config {
 		c.Request.Headers = RedactHeaders(cfg.Request.Headers)
 	}
 
+	if cfg.Scenario != nil {
+		c.Scenario = &ScenarioConfig{
+			Name:  cfg.Scenario.Name,
+			Steps: make([]StepConfig, len(cfg.Scenario.Steps)),
+		}
+		for i, s := range cfg.Scenario.Steps {
+			clonedStep := StepConfig{
+				Name:              s.Name,
+				URL:               RedactURL(s.URL),
+				Method:            s.Method,
+				Body:              s.Body,
+				ExpectedStatuses:  make([]int, len(s.ExpectedStatuses)),
+				Timeout:           s.Timeout,
+				ResponseBodyLimit: s.ResponseBodyLimit,
+				Redirects:         s.Redirects,
+				ThinkTime:         s.ThinkTime,
+				OnFailure:         s.OnFailure,
+			}
+			copy(clonedStep.ExpectedStatuses, s.ExpectedStatuses)
+			if s.Headers != nil {
+				clonedStep.Headers = RedactHeaders(s.Headers)
+			}
+			if s.Extract != nil {
+				clonedStep.Extract = make(map[string]ExtractRuleConfig, len(s.Extract))
+				for k, v := range s.Extract {
+					clonedStep.Extract[k] = v
+				}
+			}
+			c.Scenario.Steps[i] = clonedStep
+		}
+	}
+
 	if cfg.Thresholds != nil {
 		c.Thresholds = make(map[string]string, len(cfg.Thresholds))
 		for k, v := range cfg.Thresholds {

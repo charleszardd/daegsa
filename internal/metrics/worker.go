@@ -71,6 +71,9 @@ type WorkerMetrics struct {
 
 	SchedulerLagMaxMS     float64
 	FirstThrottleOffsetNS int64
+
+	StepWorkers        map[string]*WorkerMetrics
+	ScenarioIterations ScenarioIterationCounts
 }
 
 // NewWorkerMetrics creates and initializes a new WorkerMetrics instance for the given worker ID.
@@ -88,11 +91,25 @@ func NewWorkerMetrics(workerID int) *WorkerMetrics {
 		SuccessLatency:        NewLatencyHistogram(),
 		ErrorSamples:          make([]ErrorSample, 0, MaxErrorSamples),
 		FirstThrottleOffsetNS: -1,
+		StepWorkers:           make(map[string]*WorkerMetrics),
 		RateLimits: RateLimitObservations{
 			RetryAfterSamples: make([]string, 0, MaxRateLimitSamples),
 			RateLimitHeaders:  make([]RateLimitHeaderSample, 0, MaxRateLimitSamples),
 		},
 	}
+}
+
+// GetOrCreateStepWorker retrieves or initializes worker metrics for a named step (§9).
+func (w *WorkerMetrics) GetOrCreateStepWorker(stepName string) *WorkerMetrics {
+	if w.StepWorkers == nil {
+		w.StepWorkers = make(map[string]*WorkerMetrics)
+	}
+	stepWM, exists := w.StepWorkers[stepName]
+	if !exists {
+		stepWM = NewWorkerMetrics(w.WorkerID)
+		w.StepWorkers[stepName] = stepWM
+	}
+	return stepWM
 }
 
 // RecordResult records the outcome, latency, status code, bytes, and diagnostics of an execution result (§4, §8, §9).
@@ -265,6 +282,13 @@ func (w *WorkerMetrics) Snapshot() *WorkerMetrics {
 	rateLimitHeaders := make([]RateLimitHeaderSample, len(w.RateLimits.RateLimitHeaders))
 	copy(rateLimitHeaders, w.RateLimits.RateLimitHeaders)
 
+	stepWorkers := make(map[string]*WorkerMetrics, len(w.StepWorkers))
+	for k, v := range w.StepWorkers {
+		if v != nil {
+			stepWorkers[k] = v.Snapshot()
+		}
+	}
+
 	return &WorkerMetrics{
 		WorkerID:              w.WorkerID,
 		Planned:               w.Planned,
@@ -284,6 +308,8 @@ func (w *WorkerMetrics) Snapshot() *WorkerMetrics {
 		ErrorSamples:          errorSamples,
 		SchedulerLagMaxMS:     w.SchedulerLagMaxMS,
 		FirstThrottleOffsetNS: w.FirstThrottleOffsetNS,
+		StepWorkers:           stepWorkers,
+		ScenarioIterations:    w.ScenarioIterations,
 		RateLimits: RateLimitObservations{
 			Observed429Count:  w.RateLimits.Observed429Count,
 			RetryAfterSamples: retryAfterSamples,

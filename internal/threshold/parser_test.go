@@ -395,3 +395,98 @@ func TestParseThresholds_DeterministicOrdering(t *testing.T) {
 		}
 	}
 }
+
+func TestParseThreshold_StepThresholds(t *testing.T) {
+	tests := []struct {
+		name         string
+		metric       string
+		expr         string
+		wantStepName string
+		wantCategory threshold.MetricCategory
+		wantOp       string
+		wantTarget   float64
+		expectErr    bool
+	}{
+		{
+			name:         "step latency p95",
+			metric:       "step.login.p95",
+			expr:         "<= 100ms",
+			wantStepName: "login",
+			wantCategory: threshold.MetricCategoryLatency,
+			wantOp:       "<=",
+			wantTarget:   100.0,
+			expectErr:    false,
+		},
+		{
+			name:         "step http error rate",
+			metric:       "step.items.http_error_rate",
+			expr:         "<= 2%",
+			wantStepName: "items",
+			wantCategory: threshold.MetricCategoryRate,
+			wantOp:       "<=",
+			wantTarget:   2.0,
+			expectErr:    false,
+		},
+		{
+			name:         "step throughput",
+			metric:       "step.checkout.completed_rps",
+			expr:         ">= 50",
+			wantStepName: "checkout",
+			wantCategory: threshold.MetricCategoryThroughput,
+			wantOp:       ">=",
+			wantTarget:   50.0,
+			expectErr:    false,
+		},
+		{
+			name:      "step missing step name",
+			metric:    "step..p95",
+			expr:      "<= 100ms",
+			expectErr: true,
+		},
+		{
+			name:      "step missing canonical metric",
+			metric:    "step.login.",
+			expr:      "<= 100ms",
+			expectErr: true,
+		},
+		{
+			name:      "step unknown metric",
+			metric:    "step.login.unknown_metric",
+			expr:      "<= 100ms",
+			expectErr: true,
+		},
+		{
+			name:      "step too many segments",
+			metric:    "step.sub.login.p95",
+			expr:      "<= 100ms",
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			th, err := threshold.ParseThreshold(tt.metric, tt.expr)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error, got parsed threshold: %+v", th)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if th.StepName != tt.wantStepName {
+					t.Errorf("StepName = %q, want %q", th.StepName, tt.wantStepName)
+				}
+				if th.Category != tt.wantCategory {
+					t.Errorf("Category = %q, want %q", th.Category, tt.wantCategory)
+				}
+				if th.Operator != tt.wantOp {
+					t.Errorf("Operator = %q, want %q", th.Operator, tt.wantOp)
+				}
+				if th.TargetValue != tt.wantTarget {
+					t.Errorf("TargetValue = %g, want %g", th.TargetValue, tt.wantTarget)
+				}
+			}
+		})
+	}
+}

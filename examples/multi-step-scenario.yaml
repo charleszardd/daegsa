@@ -1,0 +1,59 @@
+schema_version: 1
+name: "multi-step-scenario-example"
+
+scenario:
+  name: "auth_and_query_workflow"
+  steps:
+    - name: "login"
+      url: "http://127.0.0.1:8080/auth/login"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body: '{"username":"admin","password":"password"}'
+      expected_statuses: [200]
+      timeout: "5s"
+      extract:
+        token:
+          from: "json"
+          expression: "token"
+        user_id:
+          from: "json"
+          expression: "user_id"
+      on_failure: "stop"
+
+    - name: "get_items"
+      url: "http://127.0.0.1:8080/api/items"
+      method: "GET"
+      headers:
+        Authorization: "Bearer $${token}"
+        X-User-ID: "$${user_id}"
+      expected_statuses: [200]
+      timeout: "5s"
+      think_time: "50ms"
+      on_failure: "continue"
+
+    - name: "logout"
+      url: "http://127.0.0.1:8080/api/logout"
+      method: "POST"
+      expected_statuses: [200]
+      timeout: "5s"
+      on_failure: "continue"
+
+load:
+  model: "closed"
+  users: 10
+  think_time: "100ms"
+  duration: "30s"
+  graceful_stop: "5s"
+
+thresholds:
+  http_error_rate: "<= 1%"
+  p95: "<= 250ms"
+  step.login.p95: "<= 150ms"
+  step.get_items.p95: "<= 200ms"
+
+safety:
+  allowed_hosts:
+    - "127.0.0.1"
+    - "localhost"
+  allow_non_idempotent: true

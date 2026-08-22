@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/report"
 )
 
@@ -38,6 +39,7 @@ func validateReportJSONStructure(t *testing.T, data []byte) {
 		"rate_limits":           true,
 		"generator_health":      true,
 		"auth":                  true,
+		"scenario":              true,
 		"thresholds":            true,
 		"incomplete":            true,
 	}
@@ -520,5 +522,94 @@ func TestReport_Serialization_WithAuth(t *testing.T) {
 	}
 	if authObj["cookie_jar_enabled"] != true {
 		t.Errorf("expected cookie_jar_enabled=true, got %v", authObj["cookie_jar_enabled"])
+	}
+}
+
+func TestReportJSON_ScenarioStructure(t *testing.T) {
+	rep := &report.Report{
+		ReportSchemaVersion: 1,
+		DaegsaVersion:       "v0.1.0-dev",
+		Commit:              "abc1234",
+		BuildDate:           "2026-08-22T00:00:00Z",
+		OS:                  "windows",
+		Arch:                "amd64",
+		ConfigFingerprint:   "fp123",
+		StartTimeUTC:        time.Now().UTC().Add(-10 * time.Second),
+		EndTimeUTC:          time.Now().UTC(),
+		DurationMS:          10000,
+		WorkloadModel:       core.WorkloadModelClosed,
+		RequestCounts: report.RequestCounts{
+			Planned:   200,
+			Scheduled: 200,
+			Started:   200,
+			Completed: 200,
+		},
+		Outcomes: map[core.Outcome]int64{
+			core.OutcomeSuccess: 200,
+		},
+		StatusCodes: map[string]int64{
+			"200": 200,
+		},
+		Latency: report.LatencySummary{
+			AllCompleted: report.LatencyPercentiles{
+				P50MS: 20.0,
+				P95MS: 40.0,
+				P99MS: 50.0,
+			},
+		},
+		Scenario: &report.ScenarioReport{
+			Name: "order_flow",
+			Iterations: metrics.ScenarioIterationCounts{
+				Planned:   100,
+				Started:   100,
+				Completed: 100,
+				Failed:    0,
+			},
+			Steps: []report.StepReport{
+				{
+					Name:   "login",
+					Method: "POST",
+					URL:    "https://api.example.com/login",
+					RequestCounts: report.RequestCounts{
+						Completed: 100,
+					},
+					Latency: report.LatencySummary{
+						AllCompleted: report.LatencyPercentiles{
+							P50MS: 10.0,
+							P95MS: 20.0,
+							P99MS: 30.0,
+						},
+					},
+					CompletedThroughput: 10.0,
+					ErrorRate:           0.0,
+				},
+			},
+		},
+		Thresholds: make([]report.ThresholdResult, 0),
+		Incomplete: false,
+	}
+
+	data, err := rep.ToJSON()
+	if err != nil {
+		t.Fatalf("Report.ToJSON() error: %v", err)
+	}
+
+	validateReportJSONStructure(t, data)
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	scObj, ok := parsed["scenario"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected scenario object in JSON report")
+	}
+	if scObj["name"] != "order_flow" {
+		t.Errorf("expected scenario name 'order_flow', got %v", scObj["name"])
+	}
+	stepsArr, ok := scObj["steps"].([]interface{})
+	if !ok || len(stepsArr) != 1 {
+		t.Fatalf("expected 1 step in steps array, got %v", stepsArr)
 	}
 }

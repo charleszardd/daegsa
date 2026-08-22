@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,20 +14,21 @@ import (
 	"github.com/charleszardd/daegsa/internal/executor"
 	"github.com/charleszardd/daegsa/internal/metrics"
 	"github.com/charleszardd/daegsa/internal/plan"
+	"github.com/charleszardd/daegsa/internal/scenario"
 )
 
 var (
-	// ErrInvalidPlan indicates a nil or malformed execution plan.
-	ErrInvalidPlan = errors.New("invalid execution plan")
+	// ErrIncompatibleModel is returned when a ClosedScheduler is created with a non-closed Plan.
+	ErrIncompatibleModel = errors.New("plan model is not closed")
 
-	// ErrInvalidExecutor indicates a nil HTTP executor.
-	ErrInvalidExecutor = errors.New("invalid http executor")
+	// ErrZeroUsers indicates a closed workload configuration with <= 0 users.
+	ErrZeroUsers = errors.New("closed workload users must be > 0")
 
-	// ErrIncompatibleModel indicates a plan workload model other than closed.
-	ErrIncompatibleModel = errors.New("closed scheduler requires closed workload model")
+	// ErrInvalidPlan indicates a nil or malformed Plan.
+	ErrInvalidPlan = errors.New("plan cannot be nil")
 
-	// ErrZeroUsers indicates a closed workload configuration with 0 users.
-	ErrZeroUsers = errors.New("closed workload requires users > 0")
+	// ErrInvalidExecutor indicates a nil HTTPExecutor.
+	ErrInvalidExecutor = errors.New("executor cannot be nil")
 
 	// ErrZeroDuration indicates a workload duration of 0 or negative.
 	ErrZeroDuration = errors.New("workload duration must be > 0")
@@ -36,6 +38,7 @@ var (
 type ClosedScheduler struct {
 	plan          *plan.Plan
 	executor      *executor.HTTPExecutor
+	scenarioExec  *scenario.ScenarioExecutor
 	clock         clock.Clock
 	healthSampler *metrics.GeneratorHealthSampler
 	stateMachine  *core.LifecycleStateMachine
@@ -66,6 +69,18 @@ func NewClosedScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clo
 	}
 	exec.SetClock(clk)
 
+	var scenarioExec *scenario.ScenarioExecutor
+	if p.Scenario != nil {
+		scenarioExec = scenario.NewScenarioExecutor(
+			p.Scenario,
+			exec.Transport(),
+			p.AllowedHosts,
+			p.RedirectPolicy,
+			p.KnownSecrets,
+			clk,
+		)
+	}
+
 	workers := make([]*metrics.WorkerMetrics, p.Users)
 	for i := 0; i < int(p.Users); i++ {
 		workers[i] = metrics.NewWorkerMetrics(i)
@@ -74,6 +89,7 @@ func NewClosedScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clo
 	return &ClosedScheduler{
 		plan:          p,
 		executor:      exec,
+		scenarioExec:  scenarioExec,
 		clock:         clk,
 		healthSampler: metrics.NewGeneratorHealthSampler(clk),
 		stateMachine:  core.NewLifecycleStateMachine(),
@@ -190,6 +206,82 @@ func (s *ClosedScheduler) runVU(
 	wg *sync.WaitGroup,
 ) {
 	defer wg.Done()
+
+	if s.plan.Scenario != nil && s.scenarioExec != nil {
+		var jar http.CookieJar
+		if s.plan.JarManager != nil {
+			jar = s.plan.JarManager.GetJar(workerID)
+		}
+		state := scenario.NewVUState(workerID, jar, nil)
+
+		for {
+			select {
+			case <-stopNewRequests:
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			wm.ScenarioIterations.Planned++
+			wm.ScenarioIterations.Started++
+
+			success, err := s.scenarioExec.ExecuteIteration(ctx, state, func(stepRes *scenario.StepResult) {
+				if stepRes == nil {
+					return
+				}
+				wm.Planned++
+				wm.Started++
+
+				stepWM := wm.GetOrCreateStepWorker(stepRes.StepName)
+				stepWM.Planned++
+				stepWM.Started++
+
+				if stepRes.Result != nil {
+					wm.Completed++
+					wm.RecordResult(stepRes.Result)
+					stepWM.Completed++
+					stepWM.RecordResult(stepRes.Result)
+				} else {
+					wm.Canceled++
+					stepWM.Canceled++
+				}
+			})
+
+			if success {
+				wm.ScenarioIterations.Completed++
+			} else {
+				wm.ScenarioIterations.Failed++
+			}
+
+			if errors.Is(err, scenario.ErrAbortVU) {
+				return
+			}
+
+			// Check if stop was signaled before waiting think time
+			select {
+			case <-stopNewRequests:
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Honor think time between scenario iterations
+			if s.plan.ThinkTime > 0 {
+				thinkTimer := s.clock.NewTimer(s.plan.ThinkTime)
+				select {
+				case <-thinkTimer.C():
+				case <-stopNewRequests:
+					thinkTimer.Stop()
+					return
+				case <-ctx.Done():
+					thinkTimer.Stop()
+					return
+				}
+			}
+		}
+	}
 
 	for {
 		// Check if stop was signaled before starting next request

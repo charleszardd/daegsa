@@ -159,6 +159,29 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 	sb.WriteString(fmt.Sprintf("  %-16s %17.2f ms %19.2f ms\n", "Max", rep.Latency.AllCompleted.MaxMS, rep.Latency.ExpectedSuccess.MaxMS))
 	sb.WriteString(fmt.Sprintf("  %-16s %17.2f ms %19.2f ms\n", "Mean", rep.Latency.AllCompleted.MeanMS, rep.Latency.ExpectedSuccess.MeanMS))
 
+	// 5b. Scenario Steps
+	if rep.Scenario != nil && len(rep.Scenario.Steps) > 0 {
+		sb.WriteString("\n" + sectionLine + "\n")
+		sb.WriteString(fmt.Sprintf("  SCENARIO: %s (Planned: %d, Completed: %d, Failed: %d)\n",
+			rep.Scenario.Name, rep.Scenario.Iterations.Planned, rep.Scenario.Iterations.Completed, rep.Scenario.Iterations.Failed))
+		sb.WriteString(sectionLine + "\n")
+		sb.WriteString(fmt.Sprintf("  %-16s %-6s %10s %10s %10s %10s %10s %10s\n",
+			"Step", "Method", "Completed", "Err Rate", "p50 (ms)", "p95 (ms)", "p99 (ms)", "Throughput"))
+
+		for _, step := range rep.Scenario.Steps {
+			sb.WriteString(fmt.Sprintf("  %-16s %-6s %10d %9.2f%% %10.2f %10.2f %10.2f %9.2f/s\n",
+				step.Name,
+				step.Method,
+				step.RequestCounts.Completed,
+				step.ErrorRate,
+				step.Latency.AllCompleted.P50MS,
+				step.Latency.AllCompleted.P95MS,
+				step.Latency.AllCompleted.P99MS,
+				step.CompletedThroughput,
+			))
+		}
+	}
+
 	// 6. Rate Limiting Observations
 	if rep.RateLimits.Observed429Count > 0 || len(rep.RateLimits.RetryAfterSamples) > 0 || len(rep.RateLimits.RateLimitHeaders) > 0 {
 		sb.WriteString("\n" + sectionLine + "\n")

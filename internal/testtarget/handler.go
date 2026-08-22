@@ -19,6 +19,11 @@ func (s *TargetServer) buildHandler() http.Handler {
 	mux.HandleFunc("/auth/header", s.handleAuthHeader)
 	mux.HandleFunc("/auth/basic", s.handleAuthBasic)
 	mux.HandleFunc("/auth/token-pool", s.handleAuthTokenPool)
+	mux.HandleFunc("/auth/login", s.handleScenarioLogin)
+	mux.HandleFunc("/api/items", s.handleScenarioItems)
+	mux.HandleFunc("/api/logout", s.handleScenarioLogout)
+	mux.HandleFunc("/scenario/fail-step", s.handleScenarioFailStep)
+	mux.HandleFunc("/scenario/dynamic", s.handleScenarioDynamic)
 	mux.HandleFunc("/", s.handleGeneralRequest)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -283,4 +288,68 @@ func (s *TargetServer) handleAuthTokenPool(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write([]byte(`{"error":"unauthorized","message":"missing token"}`))
+}
+
+func (s *TargetServer) handleScenarioLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:  "session_id",
+		Value: "sess_scenario_123456",
+		Path:  "/",
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":      "tok_jwt_scenario_abc123",
+		"user_id":    "user_scenario_42",
+		"status":     "logged_in",
+		"expires_in": 3600,
+	})
+}
+
+func (s *TargetServer) handleScenarioItems(w http.ResponseWriter, r *http.Request) {
+	authHdr := r.Header.Get("Authorization")
+	cookie, _ := r.Cookie("session_id")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"items": []string{"item_1", "item_2", "item_3"},
+		"count": 3,
+		"auth":  authHdr != "" || cookie != nil,
+	})
+}
+
+func (s *TargetServer) handleScenarioLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:   "session_id",
+		Value:  "",
+		Path:   "/",
+		MaxAge: -1,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "logged_out",
+	})
+}
+
+func (s *TargetServer) handleScenarioFailStep(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte(`{"error":"step failed deliberately"}`))
+}
+
+func (s *TargetServer) handleScenarioDynamic(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	resp := map[string]interface{}{
+		"status": "ok",
+		"params": q,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }

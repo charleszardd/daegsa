@@ -69,6 +69,44 @@ func BuildReport(
 				CookieJarEnabled: p.CookieJarEnabled,
 			}
 		}
+
+		if p.Scenario != nil {
+			scenarioReport := &ScenarioReport{
+				Name: p.Scenario.Name,
+			}
+			if agg != nil {
+				scenarioReport.Iterations = agg.ScenarioIterations
+			}
+
+			steps := make([]StepReport, 0, len(p.Scenario.Steps))
+			for _, step := range p.Scenario.Steps {
+				stepRep := StepReport{
+					Name:   step.Name,
+					URL:    step.URL,
+					Method: step.Method,
+				}
+				if agg != nil && agg.Steps != nil {
+					if stepAgg, ok := agg.Steps[step.Name]; ok && stepAgg != nil {
+						stepRep.RequestCounts = stepAgg.RequestCounts
+						stepRep.Outcomes = stepAgg.Outcomes
+						stepRep.StatusCodes = stepAgg.StatusCodes
+						stepRep.Latency = stepAgg.Latency
+						stepRep.AchievedStartRPS = stepAgg.AchievedStartRPS
+						stepRep.CompletedThroughput = stepAgg.CompletedThroughput
+						stepRep.ErrorRate = stepAgg.ErrorRate
+					}
+				}
+				if stepRep.Outcomes == nil {
+					stepRep.Outcomes = make(map[core.Outcome]int64)
+				}
+				if stepRep.StatusCodes == nil {
+					stepRep.StatusCodes = make(map[string]int64)
+				}
+				steps = append(steps, stepRep)
+			}
+			scenarioReport.Steps = steps
+			rep.Scenario = scenarioReport
+		}
 	}
 
 	if agg != nil {

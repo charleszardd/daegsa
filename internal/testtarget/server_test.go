@@ -400,3 +400,71 @@ func TestTargetServer_AuthEndpoints(t *testing.T) {
 		t.Errorf("expected response to contain a non-secret token_hash, got %s", string(body))
 	}
 }
+
+func TestTargetServer_ScenarioEndpoints(t *testing.T) {
+	ts := testtarget.NewServer()
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	// 1. POST /auth/login
+	loginResp, err := client.Post(ts.URL()+"/auth/login", "application/json", strings.NewReader(`{"user":"test"}`))
+	if err != nil {
+		t.Fatalf("POST /auth/login failed: %v", err)
+	}
+	defer loginResp.Body.Close()
+
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /auth/login, got %d", loginResp.StatusCode)
+	}
+
+	var loginData map[string]interface{}
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginData); err != nil {
+		t.Fatalf("failed to decode login JSON: %v", err)
+	}
+	if loginData["token"] != "tok_jwt_scenario_abc123" {
+		t.Errorf("expected token 'tok_jwt_scenario_abc123', got %v", loginData["token"])
+	}
+
+	// 2. GET /api/items with session cookie in jar
+	itemsResp, err := client.Get(ts.URL() + "/api/items")
+	if err != nil {
+		t.Fatalf("GET /api/items failed: %v", err)
+	}
+	defer itemsResp.Body.Close()
+
+	if itemsResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /api/items, got %d", itemsResp.StatusCode)
+	}
+
+	// 3. POST /api/logout
+	logoutResp, err := client.Post(ts.URL()+"/api/logout", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/logout failed: %v", err)
+	}
+	defer logoutResp.Body.Close()
+	if logoutResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /api/logout, got %d", logoutResp.StatusCode)
+	}
+
+	// 4. GET /scenario/fail-step
+	failResp, err := client.Get(ts.URL() + "/scenario/fail-step")
+	if err != nil {
+		t.Fatalf("GET /scenario/fail-step failed: %v", err)
+	}
+	defer failResp.Body.Close()
+	if failResp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500 from /scenario/fail-step, got %d", failResp.StatusCode)
+	}
+
+	// 5. GET /scenario/dynamic
+	dynResp, err := client.Get(ts.URL() + "/scenario/dynamic?user_id=42&cat=books")
+	if err != nil {
+		t.Fatalf("GET /scenario/dynamic failed: %v", err)
+	}
+	defer dynResp.Body.Close()
+	if dynResp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 from /scenario/dynamic, got %d", dynResp.StatusCode)
+	}
+}

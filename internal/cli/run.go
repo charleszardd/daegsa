@@ -78,9 +78,10 @@ func newRunCmd() *cobra.Command {
 
 			if p != nil && len(p.Thresholds) > 0 {
 				var evalErr error
-				evalResults, allThresholdsPassed, evalErr = threshold.Evaluate(
+				evalResults, allThresholdsPassed, evalErr = threshold.EvaluateWithSteps(
 					p.Thresholds,
 					evaluationAggregate.ToThresholdSnapshot(),
+					evaluationAggregate.ToStepThresholdSnapshots(),
 					p.ToEvaluationContext(),
 				)
 				if evalErr != nil {

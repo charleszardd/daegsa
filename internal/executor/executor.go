@@ -221,6 +221,11 @@ func (e *HTTPExecutor) ExecuteRequest(ctx context.Context, workerID int) (*Resul
 	}, nil
 }
 
+// Transport returns the underlying shared HTTP transport (§8).
+func (e *HTTPExecutor) Transport() *http.Transport {
+	return e.transport
+}
+
 // Close releases pooled idle TCP connections and cleans up executor resources (§8).
 func (e *HTTPExecutor) Close() {
 	if e.transport != nil {

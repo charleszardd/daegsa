@@ -124,3 +124,115 @@ func TestMergeWorkers_Empty(t *testing.T) {
 		t.Errorf("expected zeroes for empty worker merge, got %+v", agg)
 	}
 }
+
+func TestMergeWorkers_StepMetricsReconciliation(t *testing.T) {
+	const numWorkers = 4
+	workers := make([]*WorkerMetrics, numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		wm := NewWorkerMetrics(i)
+
+		// 3 steps per worker: login (20 req), get_items (50 req), logout (20 req)
+		stepLogin := wm.GetOrCreateStepWorker("login")
+		stepItems := wm.GetOrCreateStepWorker("get_items")
+		stepLogout := wm.GetOrCreateStepWorker("logout")
+
+		for j := 0; j < 20; j++ {
+			res := &executor.Result{
+				Outcome:    core.OutcomeSuccess,
+				StatusCode: 200,
+				Latency:    15 * time.Millisecond,
+			}
+			wm.Planned++
+			wm.Started++
+			wm.Completed++
+			wm.RecordResult(res)
+
+			stepLogin.Planned++
+			stepLogin.Started++
+			stepLogin.Completed++
+			stepLogin.RecordResult(res)
+		}
+
+		for j := 0; j < 50; j++ {
+			res := &executor.Result{
+				Outcome:    core.OutcomeSuccess,
+				StatusCode: 200,
+				Latency:    30 * time.Millisecond,
+			}
+			wm.Planned++
+			wm.Started++
+			wm.Completed++
+			wm.RecordResult(res)
+
+			stepItems.Planned++
+			stepItems.Started++
+			stepItems.Completed++
+			stepItems.RecordResult(res)
+		}
+
+		for j := 0; j < 20; j++ {
+			res := &executor.Result{
+				Outcome:    core.OutcomeSuccess,
+				StatusCode: 200,
+				Latency:    10 * time.Millisecond,
+			}
+			wm.Planned++
+			wm.Started++
+			wm.Completed++
+			wm.RecordResult(res)
+
+			stepLogout.Planned++
+			stepLogout.Started++
+			stepLogout.Completed++
+			stepLogout.RecordResult(res)
+		}
+
+		workers[i] = wm
+	}
+
+	testDuration := 10 * time.Second
+	agg, err := MergeWorkers(workers, testDuration)
+	if err != nil {
+		t.Fatalf("failed to merge workers: %v", err)
+	}
+
+	// Root completed requests: 4 workers * (20 + 50 + 20) = 4 * 90 = 360
+	if agg.RequestCounts.Completed != 360 {
+		t.Errorf("expected root completed 360, got %d", agg.RequestCounts.Completed)
+	}
+
+	if len(agg.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(agg.Steps))
+	}
+
+	loginAgg := agg.Steps["login"]
+	if loginAgg == nil || loginAgg.RequestCounts.Completed != 80 { // 4 * 20
+		t.Errorf("expected login step completed 80, got %v", loginAgg)
+	}
+
+	itemsAgg := agg.Steps["get_items"]
+	if itemsAgg == nil || itemsAgg.RequestCounts.Completed != 200 { // 4 * 50
+		t.Errorf("expected get_items step completed 200, got %v", itemsAgg)
+	}
+
+	logoutAgg := agg.Steps["logout"]
+	if logoutAgg == nil || logoutAgg.RequestCounts.Completed != 80 { // 4 * 20
+		t.Errorf("expected logout step completed 80, got %v", logoutAgg)
+	}
+
+	// Verify exact sum reconciliation
+	stepTotalCompleted := loginAgg.RequestCounts.Completed + itemsAgg.RequestCounts.Completed + logoutAgg.RequestCounts.Completed
+	if stepTotalCompleted != agg.RequestCounts.Completed {
+		t.Errorf("step sum %d does not match root completed %d", stepTotalCompleted, agg.RequestCounts.Completed)
+	}
+
+	// Verify ToStepThresholdSnapshots
+	stepSnaps := agg.ToStepThresholdSnapshots()
+	if len(stepSnaps) != 3 {
+		t.Fatalf("expected 3 step snapshots, got %d", len(stepSnaps))
+	}
+	if stepSnaps["get_items"].CompletedRequests != 200 {
+		t.Errorf("expected get_items snapshot completed 200, got %d", stepSnaps["get_items"].CompletedRequests)
+	}
+}
