@@ -10,6 +10,7 @@ import (
 	"github.com/charleszardd/daegsa/internal/auth"
 	"github.com/charleszardd/daegsa/internal/config"
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/profile"
 	"github.com/charleszardd/daegsa/internal/safety"
 	"github.com/charleszardd/daegsa/internal/threshold"
 )
@@ -47,6 +48,8 @@ type Plan struct {
 	JarManager         *auth.VUJarManager
 	CookieJarEnabled   bool
 	KnownSecrets       []string
+	CompiledSegments   []profile.Segment
+	PeakTargetRPS      float64
 }
 
 // BuildPlan constructs a deeply cloned, immutable Plan from a validated Config and PreflightResult (§4, §7).
@@ -56,6 +59,15 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 	}
 	if preflight == nil {
 		return nil, fmt.Errorf("cannot build plan from nil preflight result")
+	}
+
+	var compiledProfile *profile.Compilation
+	if cfg.Load.Model == core.WorkloadModelOpen {
+		var compileErr error
+		compiledProfile, compileErr = config.CompileLoadProfile(&cfg.Load)
+		if compileErr != nil {
+			return nil, fmt.Errorf("failed to compile load profile: %w", compileErr)
+		}
 	}
 
 	fingerprint, err := config.ComputeFingerprint(cfg)
@@ -152,6 +164,15 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		}
 	}
 
+	var compiledSegments []profile.Segment
+	var peakTargetRPS float64
+	var planDuration = cfg.Load.Duration.Duration()
+	if compiledProfile != nil {
+		compiledSegments = append([]profile.Segment(nil), compiledProfile.Segments...)
+		peakTargetRPS = compiledProfile.PeakTargetRPS
+		planDuration = compiledProfile.TotalDuration
+	}
+
 	p := &Plan{
 		Name:               cfg.Name,
 		SchemaVersion:      cfg.SchemaVersion,
@@ -167,7 +188,7 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		Rate:               cfg.Load.Rate,
 		TimeUnit:           cfg.Load.TimeUnit.Duration(),
 		MaxInFlight:        cfg.Load.MaxInFlight,
-		Duration:           cfg.Load.Duration.Duration(),
+		Duration:           planDuration,
 		GracefulStop:       cfg.Load.GracefulStop.Duration(),
 		Users:              cfg.Load.Users,
 		ThinkTime:          cfg.Load.ThinkTime.Duration(),
@@ -183,6 +204,8 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 		JarManager:         jarManager,
 		CookieJarEnabled:   cfg.Auth.CookieJar,
 		KnownSecrets:       knownSecrets,
+		CompiledSegments:   compiledSegments,
+		PeakTargetRPS:      peakTargetRPS,
 	}
 
 	return p, nil
@@ -190,7 +213,13 @@ func BuildPlan(cfg *config.Config, preflight *safety.PreflightResult) (*Plan, er
 
 // TargetRPS returns the computed target arrival rate per second for open model plans (§7).
 func (p *Plan) TargetRPS() float64 {
-	if p == nil || p.TimeUnit <= 0 {
+	if p == nil {
+		return 0.0
+	}
+	if p.PeakTargetRPS > 0 {
+		return p.PeakTargetRPS
+	}
+	if p.TimeUnit <= 0 {
 		return 0.0
 	}
 	return p.Rate / p.TimeUnit.Seconds()

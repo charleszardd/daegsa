@@ -19,6 +19,9 @@ const (
 	// StateRunning indicates the primary measured load test duration is actively running.
 	StateRunning LifecycleState = "running"
 
+	// StateCooldown indicates profile cool-down traffic is running and excluded from thresholds.
+	StateCooldown LifecycleState = "cooldown"
+
 	// StateGracefulStop indicates no new requests are scheduled, and in-flight requests are draining.
 	StateGracefulStop LifecycleState = "graceful_stop"
 
@@ -37,7 +40,7 @@ var (
 // IsValid reports whether s is a recognized lifecycle state.
 func (s LifecycleState) IsValid() bool {
 	switch s {
-	case StateInitialized, StateWarmup, StateRunning, StateGracefulStop, StateCanceled, StateCompleted:
+	case StateInitialized, StateWarmup, StateRunning, StateCooldown, StateGracefulStop, StateCanceled, StateCompleted:
 		return true
 	default:
 		return false
@@ -57,7 +60,9 @@ func (s LifecycleState) CanTransitionTo(next LifecycleState) bool {
 	case StateWarmup:
 		return next == StateRunning || next == StateGracefulStop || next == StateCanceled
 	case StateRunning:
-		return next == StateGracefulStop || next == StateCanceled || next == StateCompleted
+		return next == StateCooldown || next == StateGracefulStop || next == StateCanceled || next == StateCompleted
+	case StateCooldown:
+		return next == StateGracefulStop || next == StateCanceled
 	case StateGracefulStop:
 		return next == StateCompleted || next == StateCanceled
 	case StateCanceled:

@@ -5,105 +5,138 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
-// RateLimitInfo captures parsed rate-limiting and throttling metadata from HTTP response headers (§9, §14).
-type RateLimitInfo struct {
-	RetryAfterSeconds *int64     `json:"retry_after_seconds,omitempty"`
-	RetryAfterDate    *time.Time `json:"retry_after_date,omitempty"`
-	Limit             *int64     `json:"limit,omitempty"`
-	Remaining         *int64     `json:"remaining,omitempty"`
-	ResetSeconds      *int64     `json:"reset_seconds,omitempty"`
-	ResetDate         *time.Time `json:"reset_date,omitempty"`
-	Policy            string     `json:"policy,omitempty"`
+const (
+	maxRateLimitHeaderValueLength = 128
+	rateLimitEpochThreshold       = 1000000000
+)
+
+type HeaderParseObservation struct {
+	Name    string
+	Present bool
+	Valid   bool
+	Value   string
 }
 
-// ExtractRateLimitInfo inspects HTTP response headers and extracts standardized rate-limit metadata (§9, §14).
+// RateLimitInfo captures parsed rate-limiting metadata and bounded parse evidence.
+type RateLimitInfo struct {
+	RetryAfterSeconds  *int64                   `json:"retry_after_seconds,omitempty"`
+	RetryAfterDate     *time.Time               `json:"retry_after_date,omitempty"`
+	Limit              *int64                   `json:"limit,omitempty"`
+	Remaining          *int64                   `json:"remaining,omitempty"`
+	ResetSeconds       *int64                   `json:"reset_seconds,omitempty"`
+	ResetDate          *time.Time               `json:"reset_date,omitempty"`
+	Policy             string                   `json:"policy,omitempty"`
+	HeaderObservations []HeaderParseObservation `json:"-"`
+}
+
+// ExtractRateLimitInfo applies standard-over-legacy precedence and retains
+// parse-validity evidence without retaining unbounded response data.
 func ExtractRateLimitInfo(headers http.Header) *RateLimitInfo {
 	if headers == nil {
 		return nil
 	}
+	info := &RateLimitInfo{}
 
-	var info RateLimitInfo
-	hasAny := false
-
-	// 1. Retry-After header
-	if retryAfterStr := strings.TrimSpace(headers.Get("Retry-After")); retryAfterStr != "" {
-		if secs, err := strconv.ParseInt(retryAfterStr, 10, 64); err == nil {
-			info.RetryAfterSeconds = &secs
-			hasAny = true
-		} else if parsedTime, err := http.ParseTime(retryAfterStr); err == nil {
+	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
+	if retryAfter != "" {
+		observation := HeaderParseObservation{Name: "retry_after", Present: true}
+		if seconds, err := strconv.ParseInt(retryAfter, 10, 64); err == nil && seconds >= 0 {
+			info.RetryAfterSeconds = &seconds
+			observation.Valid = true
+			observation.Value = strconv.FormatInt(seconds, 10)
+		} else if parsedTime, err := http.ParseTime(retryAfter); err == nil {
 			info.RetryAfterDate = &parsedTime
-			hasAny = true
+			observation.Valid = true
+			observation.Value = parsedTime.UTC().Format(http.TimeFormat)
 		}
+		info.HeaderObservations = append(info.HeaderObservations, observation)
 	}
 
-	// 2. Limit header (RateLimit-Limit or X-RateLimit-Limit)
-	limitStr := strings.TrimSpace(headers.Get("RateLimit-Limit"))
-	if limitStr == "" {
-		limitStr = strings.TrimSpace(headers.Get("X-RateLimit-Limit"))
+	limitRaw, limitPresent := preferredHeader(headers, "RateLimit-Limit", "X-RateLimit-Limit")
+	if limitPresent {
+		info.Limit = parseObservedNumeric(info, "limit", limitRaw)
 	}
-	if limitStr != "" {
-		if val, err := parseRateLimitNumeric(limitStr); err == nil {
-			info.Limit = &val
-			hasAny = true
-		}
+	remainingRaw, remainingPresent := preferredHeader(headers, "RateLimit-Remaining", "X-RateLimit-Remaining")
+	if remainingPresent {
+		info.Remaining = parseObservedNumeric(info, "remaining", remainingRaw)
 	}
-
-	// 3. Remaining header (RateLimit-Remaining or X-RateLimit-Remaining)
-	remStr := strings.TrimSpace(headers.Get("RateLimit-Remaining"))
-	if remStr == "" {
-		remStr = strings.TrimSpace(headers.Get("X-RateLimit-Remaining"))
-	}
-	if remStr != "" {
-		if val, err := parseRateLimitNumeric(remStr); err == nil {
-			info.Remaining = &val
-			hasAny = true
-		}
-	}
-
-	// 4. Reset header (RateLimit-Reset or X-RateLimit-Reset)
-	resetStr := strings.TrimSpace(headers.Get("RateLimit-Reset"))
-	if resetStr == "" {
-		resetStr = strings.TrimSpace(headers.Get("X-RateLimit-Reset"))
-	}
-	if resetStr != "" {
-		if val, err := parseRateLimitNumeric(resetStr); err == nil {
-			// If unix epoch timestamp (e.g. > 1,000,000,000)
-			if val > 1000000000 {
-				t := time.Unix(val, 0).UTC()
-				info.ResetDate = &t
+	resetRaw, resetPresent := preferredHeader(headers, "RateLimit-Reset", "X-RateLimit-Reset")
+	if resetPresent {
+		observation := HeaderParseObservation{Name: "reset", Present: true}
+		if value, err := parseRateLimitNumeric(resetRaw); err == nil && value >= 0 {
+			observation.Valid = true
+			if value > rateLimitEpochThreshold {
+				parsedTime := time.Unix(value, 0).UTC()
+				info.ResetDate = &parsedTime
+				observation.Value = parsedTime.Format(http.TimeFormat)
 			} else {
-				info.ResetSeconds = &val
+				info.ResetSeconds = &value
+				observation.Value = strconv.FormatInt(value, 10)
 			}
-			hasAny = true
-		} else if parsedTime, err := http.ParseTime(resetStr); err == nil {
+		} else if parsedTime, err := http.ParseTime(resetRaw); err == nil {
 			info.ResetDate = &parsedTime
-			hasAny = true
+			observation.Valid = true
+			observation.Value = parsedTime.UTC().Format(http.TimeFormat)
 		}
+		info.HeaderObservations = append(info.HeaderObservations, observation)
 	}
-
-	// 5. Policy header (RateLimit-Policy)
 	if policy := strings.TrimSpace(headers.Get("RateLimit-Policy")); policy != "" {
-		info.Policy = policy
-		hasAny = true
+		info.Policy = sanitizeHeaderValue(policy)
+		info.HeaderObservations = append(info.HeaderObservations, HeaderParseObservation{Name: "policy", Present: true, Valid: true, Value: info.Policy})
 	}
-
-	if !hasAny {
+	if len(info.HeaderObservations) == 0 {
 		return nil
 	}
-
-	return &info
+	return info
 }
 
-func parseRateLimitNumeric(s string) (int64, error) {
-	// If header contains multiple parameters like "100, 100;w=60", extract first token
-	if idx := strings.IndexAny(s, ",;"); idx != -1 {
-		s = strings.TrimSpace(s[:idx])
+func preferredHeader(headers http.Header, standardName, legacyName string) (string, bool) {
+	if values, exists := headers[http.CanonicalHeaderKey(standardName)]; exists && len(values) > 0 {
+		return strings.TrimSpace(values[0]), true
 	}
-	// Try float first to handle formatted rates like "100.0"
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return int64(f), nil
+	if values, exists := headers[http.CanonicalHeaderKey(legacyName)]; exists && len(values) > 0 {
+		return strings.TrimSpace(values[0]), true
 	}
-	return strconv.ParseInt(s, 10, 64)
+	return "", false
+}
+
+func parseObservedNumeric(info *RateLimitInfo, name, raw string) *int64 {
+	observation := HeaderParseObservation{Name: name, Present: true}
+	value, err := parseRateLimitNumeric(raw)
+	if err == nil && value >= 0 {
+		observation.Valid = true
+		observation.Value = strconv.FormatInt(value, 10)
+	}
+	info.HeaderObservations = append(info.HeaderObservations, observation)
+	if !observation.Valid {
+		return nil
+	}
+	return &value
+}
+
+func sanitizeHeaderValue(value string) string {
+	value = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > maxRateLimitHeaderValueLength {
+		value = value[:maxRateLimitHeaderValueLength]
+	}
+	return value
+}
+
+func parseRateLimitNumeric(value string) (int64, error) {
+	if index := strings.IndexAny(value, ",;"); index != -1 {
+		value = strings.TrimSpace(value[:index])
+	}
+	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		return int64(parsed), nil
+	}
+	return strconv.ParseInt(value, 10, 64)
 }

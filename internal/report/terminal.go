@@ -174,12 +174,29 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 		}
 	}
 
+	if rep.ReportSchemaVersion >= ProfileReportSchemaVersion {
+		sb.WriteString("\n" + sectionLine + "\n  PROFILE SEGMENTS\n" + sectionLine + "\n")
+		for _, segment := range rep.Segments {
+			sb.WriteString(fmt.Sprintf("  %s [%s]: target %.2f req/s, started %d, completed %d, 429 %d, reliable=%v\n", segment.Segment.Name, segment.Segment.Stage, segment.Segment.TargetRPS, segment.Metrics.RequestCounts.Started, segment.Metrics.RequestCounts.Completed, segment.Metrics.RateLimits.Observed429Count, segment.Calibration.Reliable))
+		}
+		if rep.MeasuredSummary != nil {
+			sb.WriteString(fmt.Sprintf("  Measured Only: started %d, completed %d, p95 %.2f ms\n", rep.MeasuredSummary.RequestCounts.Started, rep.MeasuredSummary.RequestCounts.Completed, rep.MeasuredSummary.Latency.AllCompleted.P95MS))
+		}
+		if rep.RateLimits.Observed429Count == 0 {
+			sb.WriteString("  No throttling observed at tested rates; this is not a guaranteed safe production limit.\n")
+		}
+	}
+
 	// 7. Generator Health
 	sb.WriteString("\n" + sectionLine + "\n")
 	sb.WriteString("  GENERATOR HEALTH\n")
 	sb.WriteString(sectionLine + "\n")
 	sb.WriteString(fmt.Sprintf("  Peak Goroutines:   %d\n", rep.GeneratorHealth.GoroutinesPeak))
-	sb.WriteString(fmt.Sprintf("  Max CPU:           %.1f%%\n", rep.GeneratorHealth.CPUMaxPercent))
+	if rep.ReportSchemaVersion >= ProfileReportSchemaVersion && !rep.GeneratorHealth.CPUAvailable {
+		sb.WriteString("  Max CPU:           unavailable\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("  Max CPU:           %.1f%%\n", rep.GeneratorHealth.CPUMaxPercent))
+	}
 	sb.WriteString(fmt.Sprintf("  Max Scheduler Lag: %.2f ms\n", rep.GeneratorHealth.SchedulerLagMaxMS))
 	if len(rep.GeneratorHealth.SaturationWarnings) > 0 {
 		sb.WriteString(fmt.Sprintf("  Warnings:          %s\n", strings.Join(rep.GeneratorHealth.SaturationWarnings, "; ")))
@@ -222,13 +239,19 @@ func FormatTerminalReport(rep *Report, p *plan.Plan) string {
 		} else {
 			resultBanner = "PASS"
 		}
-	} else if rep.RequestCounts.Completed > 0 {
-		successCount := rep.Outcomes[core.OutcomeSuccess]
-		if p != nil && p.Treat429AsExpected {
-			successCount += rep.Outcomes[core.OutcomeRateLimited]
+	} else {
+		evaluationCounts, evaluationOutcomes := rep.RequestCounts, rep.Outcomes
+		if rep.MeasuredSummary != nil {
+			evaluationCounts, evaluationOutcomes = rep.MeasuredSummary.RequestCounts, rep.MeasuredSummary.Outcomes
 		}
-		if successCount < rep.RequestCounts.Completed {
-			resultBanner = "FAIL (unexpected status codes or errors detected)"
+		if evaluationCounts.Completed > 0 {
+			successCount := evaluationOutcomes[core.OutcomeSuccess]
+			if p != nil && p.Treat429AsExpected {
+				successCount += evaluationOutcomes[core.OutcomeRateLimited]
+			}
+			if successCount < evaluationCounts.Completed {
+				resultBanner = "FAIL (unexpected status codes or errors detected)"
+			}
 		}
 	}
 	sb.WriteString(fmt.Sprintf("  TEST RESULT: %s\n", resultBanner))

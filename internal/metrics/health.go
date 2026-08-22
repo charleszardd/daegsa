@@ -24,6 +24,7 @@ const (
 
 // GeneratorHealth records load generator resource metrics to distinguish client saturation (§13, §14).
 type GeneratorHealth struct {
+	CPUAvailable       bool     `json:"cpu_available,omitempty"`
 	CPUMaxPercent      float64  `json:"cpu_max_percent"`
 	GoroutinesPeak     int64    `json:"goroutines_peak"`
 	SchedulerLagMaxMS  float64  `json:"scheduler_lag_max_ms"`
@@ -34,6 +35,7 @@ type GeneratorHealth struct {
 type GeneratorHealthSampler struct {
 	mu                sync.Mutex
 	goroutinesPeak    int64
+	cpuAvailable      bool
 	cpuMaxPercent     float64
 	schedulerLagMaxMS float64
 	warnings          []string
@@ -138,6 +140,8 @@ func (s *GeneratorHealthSampler) RecordCPUSample(percent float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.cpuAvailable = true
+	s.cpuAvailable = true
 	if percent > s.cpuMaxPercent {
 		s.cpuMaxPercent = percent
 	}
@@ -175,6 +179,7 @@ func (s *GeneratorHealthSampler) Collect() GeneratorHealth {
 	}
 
 	return GeneratorHealth{
+		CPUAvailable:       s.cpuAvailable,
 		CPUMaxPercent:      s.cpuMaxPercent,
 		GoroutinesPeak:     s.goroutinesPeak,
 		SchedulerLagMaxMS:  s.schedulerLagMaxMS,

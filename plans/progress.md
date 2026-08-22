@@ -1,39 +1,30 @@
 # DAEGSA Progress Record
 
-Canonical phase: Phase 5 - Authentication and Secret Handling
+Canonical phase: Phase 6 - Profiles and Rate-Limit Analysis
 Tranche: entire phase
 Status: COMMITTED
 
-Intended commit subject: `feat(auth): add secure authentication and session handling`
+Intended commit subject: `feat(profile): add segmented load analysis and report comparison`
 
-## Implemented and targeted validation passing
+## Acceptance evidence summary
 
-- Structured bearer, custom-header, Basic, and deterministic token-pool authentication.
-- Bounded per-VU/per-lane cookie jars and prebuilt HTTP clients sharing one transport.
-- Exact closed-model `VU_i mod N` and open-model `Lane_j mod N` token-mapping contracts.
-- Five-VU cookie persistence and cross-VU isolation integration contract.
-- Centralized header, URL, string, and error redaction; sanitized plan/report metadata.
-- CLI-wide credential-sentinel capture across validate, dry-run, successful terminal output, threshold-failure stderr, JSON reports, and configuration fingerprints.
-- Malformed URL parse and validation failures redact entire malformed URLs fail closed before config, safety, or CLI error rendering; URL-shaped string redaction covers compound queries and both username-only and password-bearing userinfo.
-- Authenticated test-target routes, example manifests, and schema changes.
-- Focused gates pass: `go test -count=1 ./internal/cli` and `go test -count=1 ./internal/scheduler`.
+- **Deterministic profile compilation:** Source segments compile into immutable constant-rate intervals; ramp segments expand deterministically into discrete constant steps with exact nanosecond duration partitioning.
+- **Ordered stage validation:** Strictly enforces `warmup` -> `measured` -> `cooldown` stage ordering with at least one `measured` segment required.
+- **Safety bounds & CLI conflicts:** Rejects `--rate` and `--duration` flags when segmented profiles are configured; validates peak target RPS against `MaxAllowedRate` and total duration against `MaxAllowedDuration`.
+- **Segment-aware open scheduler:** Single stable worker pool and shared transport across all segments; segment-local pacing reset without catch-up bursts; graceful drain after final segment.
+- **Segment metrics reconciliation:** Memory complexity bounded at O(workers + segments); exact reconciliation between root metrics and segment aggregates (planned, scheduled, started, completed, canceled, dropped, status codes, outcomes, and 429s); threshold and default pass/fail evaluated strictly against measured segments.
+- **Rate-limit intelligence:** Per-segment 429 tracking; `FirstThrottleOffsetNS` recorded; delta-seconds and RFC1123/RFC850 HTTP-Date `Retry-After` parsing; standard `RateLimit-*` precedence over legacy `X-RateLimit-*`; header consistency and parse validity tracking; control-character sanitization and secret redaction; explicit no-throttling warning banner.
+- **Generator calibration:** Reliability indicators and warnings for low achieved start rate (<95%), scheduler lag (>50ms), and dropped requests due to `max_in_flight`; CPU saturation is marked unavailable when sampling is not present.
+- **Report schemas v1 & v2:** Full backward compatibility for schema v1; strict schema v2 validation with `additionalProperties: false`.
+- **Report comparison (`daegsa compare`):** Size-bounded 10MB report loading; absolute and percentage deltas across percentiles, throughput, error rates, 429s, and segments; safe zero-baseline handling; threshold transition tracking (`fail-to-pass`, `pass-to-fail`, `added`, `removed`); comparability warnings for configuration/model differences.
+- **Validation suite:** All repository tests (`go test -count=1 ./...`), `go vet ./...`, `gofmt -l .`, and `git diff --check` passed cleanly.
 
-## Commit evidence
+## Remaining phase/tranche work
 
-- Independent tester result: `PASS` with a commit recommendation for the exact Phase 5 working tree.
-- `gofmt -l .`: PASS; no files reported.
-- `go test -count=1 ./...`: PASS.
-- `go vet ./...`: PASS.
-- `go build ./...`: PASS.
-- `git diff --check`: PASS; line-ending notices only.
-- Schema and exhaustive secret-leakage contracts passed through the repository test suite.
-- Race detection was attempted but is unavailable because CGO and a C compiler are unavailable in this Windows environment.
+- Phase 6 has no remaining defects or unfulfilled requirements.
+- Race detection (`go test -race ./...`) should be executed when running in an environment with a C compiler (CGO enabled).
 
-## Remaining work
+## Next recommended reader scope
 
-- Phase 5 has no known remaining defects.
-- Run the race suite when a CGO-enabled Windows toolchain with a C compiler is available.
-
-## Next reader scope
-
-- Phase 6 - Profiles and Rate-Limit Analysis: deterministic profile segments, segment-level rate-limit analysis, generator calibration warnings, and before/after report comparison.
+- **Phase 7 - Multi-Step Scenarios:** Per-VU state and cookies, JSON-path extraction and variable substitution, think time and deterministic data selection, login/refresh flows, step-level metrics and thresholds.
+- **Phase 8 - Distribution and Production Hardening:** Windows AMD64 standalone release packaging, checksums, embedded metadata, SBOM, `-trimpath` builds, `doctor` command, self-test, and operational documentation.

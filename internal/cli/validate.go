@@ -58,7 +58,7 @@ func loadAndPreflightConfig(ctx context.Context, flags *flagValues) (*config.Con
 			return nil, nil, nil, fmt.Errorf("%w: either --config or --url must be provided", config.ErrConfigValidation)
 		}
 		cfg = &config.Config{
-			SchemaVersion: config.ExpectedSchemaVersion,
+			SchemaVersion: config.LegacySchemaVersion,
 			Name:          "cli-execution",
 		}
 	}

@@ -1,0 +1,20 @@
+schema_version: 2
+name: rate-limit-profile
+request:
+  url: ${TARGET_URL}
+  method: GET
+  expected_statuses: [200]
+load:
+  model: open
+  time_unit: 1s
+  max_in_flight: 200
+  graceful_stop: 5s
+  segments:
+    - {name: warm-up, stage: warmup, duration: 5s, rate: 20}
+    - {name: ramp, stage: measured, duration: 30s, start_rate: 20, end_rate: 200, steps: 10}
+    - {name: soak, stage: measured, duration: 2m, rate: 200}
+    - {name: cool-down, stage: cooldown, duration: 10s, start_rate: 200, end_rate: 20, steps: 5}
+thresholds:
+  rate_limited_rate: "<= 5%"
+safety:
+  allowed_hosts: [127.0.0.1, localhost]

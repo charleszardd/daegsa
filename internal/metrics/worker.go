@@ -37,9 +37,10 @@ type RateLimitHeaderSample struct {
 
 // RateLimitObservations captures 429 throttling and rate-limit header observations (§9, §14).
 type RateLimitObservations struct {
-	Observed429Count  int64                   `json:"observed_429_count"`
-	RetryAfterSamples []string                `json:"retry_after_samples,omitempty"`
-	RateLimitHeaders  []RateLimitHeaderSample `json:"rate_limit_headers,omitempty"`
+	Observed429Count  int64                        `json:"observed_429_count"`
+	RetryAfterSamples []string                     `json:"retry_after_samples,omitempty"`
+	RateLimitHeaders  []RateLimitHeaderSample      `json:"rate_limit_headers,omitempty"`
+	HeaderConsistency map[string]HeaderConsistency `json:"header_consistency,omitempty"`
 }
 
 // WorkerMetrics maintains lock-free, worker-local metric accumulators for a single VU (§4, §9).
@@ -67,6 +68,9 @@ type WorkerMetrics struct {
 
 	ErrorSamples []ErrorSample
 	RateLimits   RateLimitObservations
+
+	SchedulerLagMaxMS     float64
+	FirstThrottleOffsetNS int64
 }
 
 // NewWorkerMetrics creates and initializes a new WorkerMetrics instance for the given worker ID.
@@ -77,12 +81,13 @@ func NewWorkerMetrics(workerID int) *WorkerMetrics {
 	}
 
 	return &WorkerMetrics{
-		WorkerID:       workerID,
-		Outcomes:       outcomes,
-		StatusCodes:    make(map[int]int64),
-		AllLatency:     NewLatencyHistogram(),
-		SuccessLatency: NewLatencyHistogram(),
-		ErrorSamples:   make([]ErrorSample, 0, MaxErrorSamples),
+		WorkerID:              workerID,
+		Outcomes:              outcomes,
+		StatusCodes:           make(map[int]int64),
+		AllLatency:            NewLatencyHistogram(),
+		SuccessLatency:        NewLatencyHistogram(),
+		ErrorSamples:          make([]ErrorSample, 0, MaxErrorSamples),
+		FirstThrottleOffsetNS: -1,
 		RateLimits: RateLimitObservations{
 			RetryAfterSamples: make([]string, 0, MaxRateLimitSamples),
 			RateLimitHeaders:  make([]RateLimitHeaderSample, 0, MaxRateLimitSamples),
@@ -141,6 +146,7 @@ func (w *WorkerMetrics) RecordResult(res *executor.Result) {
 	}
 	if res.RateLimitInfo != nil {
 		w.recordRateLimitInfo(res.RateLimitInfo)
+		w.recordHeaderObservations(res.RateLimitInfo.HeaderObservations)
 	}
 }
 
@@ -260,26 +266,29 @@ func (w *WorkerMetrics) Snapshot() *WorkerMetrics {
 	copy(rateLimitHeaders, w.RateLimits.RateLimitHeaders)
 
 	return &WorkerMetrics{
-		WorkerID:            w.WorkerID,
-		Planned:             w.Planned,
-		Scheduled:           w.Scheduled,
-		Started:             w.Started,
-		Completed:           w.Completed,
-		Canceled:            w.Canceled,
-		Dropped:             w.Dropped,
-		Outcomes:            outcomes,
-		StatusCodes:         statusCodes,
-		AllLatency:          w.AllLatency.Copy(),
-		SuccessLatency:      w.SuccessLatency.Copy(),
-		TTFBSumMicroseconds: w.TTFBSumMicroseconds,
-		TTFBCount:           w.TTFBCount,
-		BytesSent:           w.BytesSent,
-		BytesReceived:       w.BytesReceived,
-		ErrorSamples:        errorSamples,
+		WorkerID:              w.WorkerID,
+		Planned:               w.Planned,
+		Scheduled:             w.Scheduled,
+		Started:               w.Started,
+		Completed:             w.Completed,
+		Canceled:              w.Canceled,
+		Dropped:               w.Dropped,
+		Outcomes:              outcomes,
+		StatusCodes:           statusCodes,
+		AllLatency:            w.AllLatency.Copy(),
+		SuccessLatency:        w.SuccessLatency.Copy(),
+		TTFBSumMicroseconds:   w.TTFBSumMicroseconds,
+		TTFBCount:             w.TTFBCount,
+		BytesSent:             w.BytesSent,
+		BytesReceived:         w.BytesReceived,
+		ErrorSamples:          errorSamples,
+		SchedulerLagMaxMS:     w.SchedulerLagMaxMS,
+		FirstThrottleOffsetNS: w.FirstThrottleOffsetNS,
 		RateLimits: RateLimitObservations{
 			Observed429Count:  w.RateLimits.Observed429Count,
 			RetryAfterSamples: retryAfterSamples,
 			RateLimitHeaders:  rateLimitHeaders,
+			HeaderConsistency: copyHeaderConsistency(w.RateLimits.HeaderConsistency),
 		},
 	}
 }

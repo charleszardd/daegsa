@@ -10,11 +10,14 @@ import (
 	"unicode"
 
 	"github.com/charleszardd/daegsa/internal/core"
+	"github.com/charleszardd/daegsa/internal/profile"
 	"gopkg.in/yaml.v3"
 )
 
-// ExpectedSchemaVersion is the canonical configuration schema version (§6).
-const ExpectedSchemaVersion = 1
+const (
+	LegacySchemaVersion   = 1
+	ExpectedSchemaVersion = 2
+)
 
 // Default configuration constants.
 const (
@@ -143,14 +146,49 @@ type RequestConfig struct {
 
 // LoadConfig defines the workload model parameters (§2, §6).
 type LoadConfig struct {
-	Model        core.WorkloadModel `yaml:"model" json:"model"`
-	Rate         float64            `yaml:"rate,omitempty" json:"rate,omitempty"`
-	TimeUnit     Duration           `yaml:"time_unit,omitempty" json:"time_unit,omitempty"`
-	MaxInFlight  int64              `yaml:"max_in_flight,omitempty" json:"max_in_flight,omitempty"`
-	Duration     Duration           `yaml:"duration,omitempty" json:"duration,omitempty"`
-	GracefulStop Duration           `yaml:"graceful_stop,omitempty" json:"graceful_stop,omitempty"`
-	Users        int64              `yaml:"users,omitempty" json:"users,omitempty"`
-	ThinkTime    Duration           `yaml:"think_time,omitempty" json:"think_time,omitempty"`
+	Model        core.WorkloadModel     `yaml:"model" json:"model"`
+	Rate         float64                `yaml:"rate,omitempty" json:"rate,omitempty"`
+	TimeUnit     Duration               `yaml:"time_unit,omitempty" json:"time_unit,omitempty"`
+	MaxInFlight  int64                  `yaml:"max_in_flight,omitempty" json:"max_in_flight,omitempty"`
+	Duration     Duration               `yaml:"duration,omitempty" json:"duration,omitempty"`
+	GracefulStop Duration               `yaml:"graceful_stop,omitempty" json:"graceful_stop,omitempty"`
+	Users        int64                  `yaml:"users,omitempty" json:"users,omitempty"`
+	ThinkTime    Duration               `yaml:"think_time,omitempty" json:"think_time,omitempty"`
+	Segments     []ProfileSegmentConfig `yaml:"segments,omitempty" json:"segments,omitempty"`
+}
+
+// ProfileSegmentConfig is one source segment in a schema-v2 open workload profile.
+type ProfileSegmentConfig struct {
+	Name      string   `yaml:"name" json:"name"`
+	Stage     string   `yaml:"stage" json:"stage"`
+	Duration  Duration `yaml:"duration" json:"duration"`
+	Rate      float64  `yaml:"rate,omitempty" json:"rate,omitempty"`
+	StartRate float64  `yaml:"start_rate,omitempty" json:"start_rate,omitempty"`
+	EndRate   float64  `yaml:"end_rate,omitempty" json:"end_rate,omitempty"`
+	Steps     int      `yaml:"steps,omitempty" json:"steps,omitempty"`
+}
+
+// CompileLoadProfile returns the immutable constant-rate profile for an open load.
+func CompileLoadProfile(load *LoadConfig) (*profile.Compilation, error) {
+	if load == nil {
+		return nil, fmt.Errorf("%w: load cannot be nil", ErrConfigValidation)
+	}
+	source := make([]profile.SourceSegment, 0, len(load.Segments))
+	if len(load.Segments) == 0 {
+		source = append(source, profile.SourceSegment{Name: "measured", Stage: profile.StageMeasured, Duration: load.Duration.Duration(), Rate: load.Rate})
+	} else {
+		for _, segment := range load.Segments {
+			source = append(source, profile.SourceSegment{
+				Name: segment.Name, Stage: segment.Stage, Duration: segment.Duration.Duration(),
+				Rate: segment.Rate, StartRate: segment.StartRate, EndRate: segment.EndRate, Steps: segment.Steps,
+			})
+		}
+	}
+	compiled, err := profile.Compile(source, load.TimeUnit.Duration())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfigValidation, err)
+	}
+	return compiled, nil
 }
 
 // RateLimitConfig defines 429 rate-limiting analysis rules (§6, §14).

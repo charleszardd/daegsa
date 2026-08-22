@@ -9,13 +9,13 @@ import (
 
 func TestParseThreshold_ValidExpressions(t *testing.T) {
 	tests := []struct {
-		name        string
-		metricName  string
-		expr        string
-		wantCat     threshold.MetricCategory
-		wantOp      string
-		wantTarget  float64
-		wantUnit    string
+		name       string
+		metricName string
+		expr       string
+		wantCat    threshold.MetricCategory
+		wantOp     string
+		wantTarget float64
+		wantUnit   string
 	}{
 		// Rates / Percentages
 		{

@@ -24,6 +24,7 @@ spike, soak, and rate-limit testing with explicit open and closed workload model
 	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newCompareCmd())
 
 	return rootCmd
 }
