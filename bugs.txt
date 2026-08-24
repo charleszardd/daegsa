@@ -1,0 +1,4 @@
+GUI
+- [] setting up workload parameters in UI should also affect the YAML configuration
+- [] no result in live monitor after running
+- [] if closed model is selected, available parameters should display for closed, separate for open
