@@ -18,10 +18,10 @@ func TestHostAllowlist(t *testing.T) {
 		shouldAllow  bool
 	}{
 		{
-			name:         "empty allowlist allows all",
+			name:         "empty allowlist denies all",
 			targetHost:   "api.example.com",
 			allowedHosts: nil,
-			shouldAllow:  true,
+			shouldAllow:  false,
 		},
 		{
 			name:         "exact match",
@@ -139,7 +139,7 @@ func TestPreflightEngine_DestructiveMethods(t *testing.T) {
 					MaxInFlight: 20,
 				},
 			}
-			_, err := engine.Check(ctx, cfg, SafetyFlags{SkipDNSPreflight: true})
+			_, err := engine.Check(ctx, withAllowedHost(cfg, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 			if err != nil {
 				t.Fatalf("safe method %s should pass without authorization: %v", method, err)
 			}
@@ -165,7 +165,7 @@ func TestPreflightEngine_DestructiveMethods(t *testing.T) {
 					AllowNonIdempotent: false,
 				},
 			}
-			_, err := engine.Check(ctx, cfg, SafetyFlags{SkipDNSPreflight: true, AllowDestructive: false})
+			_, err := engine.Check(ctx, withAllowedHost(cfg, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true, AllowDestructive: false})
 			if err == nil {
 				t.Fatalf("destructive method %s must fail without authorization", method)
 			}
@@ -195,7 +195,7 @@ func TestPreflightEngine_DestructiveMethods(t *testing.T) {
 					AllowNonIdempotent: true,
 				},
 			}
-			_, err := engine.Check(ctx, cfg, SafetyFlags{SkipDNSPreflight: true})
+			_, err := engine.Check(ctx, withAllowedHost(cfg, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 			if err != nil {
 				t.Fatalf("destructive method %s should pass with config authorization: %v", method, err)
 			}
@@ -216,7 +216,7 @@ func TestPreflightEngine_DestructiveMethods(t *testing.T) {
 					MaxInFlight: 20,
 				},
 			}
-			_, err := engine.Check(ctx, cfg, SafetyFlags{SkipDNSPreflight: true, AllowDestructive: true})
+			_, err := engine.Check(ctx, withAllowedHost(cfg, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true, AllowDestructive: true})
 			if err != nil {
 				t.Fatalf("destructive method %s should pass with flag authorization: %v", method, err)
 			}
@@ -243,7 +243,7 @@ func TestPreflightEngine_Ceilings(t *testing.T) {
 			MaxInFlight: 100,
 		},
 	}
-	_, err := engine.Check(ctx, cfgRate, SafetyFlags{SkipDNSPreflight: true})
+	_, err := engine.Check(ctx, withAllowedHost(cfgRate, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 	if !errors.Is(err, ErrSafetyCeilingExceeded) {
 		t.Errorf("expected ErrSafetyCeilingExceeded for rate, got %v", err)
 	}
@@ -262,7 +262,7 @@ func TestPreflightEngine_Ceilings(t *testing.T) {
 			Duration: config.Duration(10 * time.Second),
 		},
 	}
-	_, err = engine.Check(ctx, cfgUsers, SafetyFlags{SkipDNSPreflight: true})
+	_, err = engine.Check(ctx, withAllowedHost(cfgUsers, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 	if !errors.Is(err, ErrSafetyCeilingExceeded) {
 		t.Errorf("expected ErrSafetyCeilingExceeded for users, got %v", err)
 	}
@@ -282,7 +282,7 @@ func TestPreflightEngine_Ceilings(t *testing.T) {
 			MaxInFlight: 100,
 		},
 	}
-	_, err = engine.Check(ctx, cfgDuration, SafetyFlags{SkipDNSPreflight: true})
+	_, err = engine.Check(ctx, withAllowedHost(cfgDuration, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 	if !errors.Is(err, ErrSafetyCeilingExceeded) {
 		t.Errorf("expected ErrSafetyCeilingExceeded for duration, got %v", err)
 	}
@@ -307,7 +307,7 @@ func TestPreflightEngine_DNSPreflight(t *testing.T) {
 			MaxInFlight: 20,
 		},
 	}
-	resIP, err := engine.Check(ctx, cfgIP, SafetyFlags{})
+	resIP, err := engine.Check(ctx, withAllowedHost(cfgIP, "127.0.0.1"), SafetyFlags{})
 	if err != nil {
 		t.Fatalf("unexpected error for IP literal: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestPreflightEngine_DNSPreflight(t *testing.T) {
 			MaxInFlight: 20,
 		},
 	}
-	resLocal, err := engine.Check(ctx, cfgLocalhost, SafetyFlags{})
+	resLocal, err := engine.Check(ctx, withAllowedHost(cfgLocalhost, "localhost"), SafetyFlags{})
 	if err != nil {
 		t.Fatalf("unexpected error resolving localhost: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestPreflightEngine_DNSPreflight(t *testing.T) {
 			MaxInFlight: 20,
 		},
 	}
-	_, err = engine.Check(ctx, cfgBadDomain, SafetyFlags{})
+	_, err = engine.Check(ctx, withAllowedHost(cfgBadDomain, "nonexistent-domain-that-does-not-exist-daegsa.invalid"), SafetyFlags{})
 	if err == nil {
 		t.Fatalf("expected DNS error for unresolvable domain, got nil")
 	}
@@ -362,18 +362,15 @@ func TestPreflightEngine_DNSPreflight(t *testing.T) {
 	}
 }
 
-func TestHostAllowlist_PortsAndIPv6(t *testing.T) {
-	// Host with port stripped matches allowed host
-	if !IsHostAllowed("localhost:8080", []string{"localhost"}) {
-		t.Errorf("expected localhost:8080 to match localhost")
+func TestHostAllowlistRequiresHostOnlyCandidates(t *testing.T) {
+	if IsHostAllowed("localhost:8080", []string{"localhost"}) {
+		t.Error("candidate with a port unexpectedly matched")
 	}
-	if !IsHostAllowed("api.example.com:443", []string{"api.example.com"}) {
-		t.Errorf("expected api.example.com:443 to match api.example.com")
+	if IsHostAllowed("api.example.com:443", []string{"api.example.com"}) {
+		t.Error("candidate with a port unexpectedly matched")
 	}
-
-	// IPv6 address matching
-	if !IsHostAllowed("[::1]", []string{"::1", "[::1]"}) {
-		t.Errorf("expected IPv6 loopback to match")
+	if !IsHostAllowed("::1", []string{"0:0:0:0:0:0:0:1"}) {
+		t.Error("canonical IPv6 host did not match")
 	}
 }
 
@@ -398,11 +395,16 @@ func TestPreflightEngine_ResponseBodyLimitCeiling(t *testing.T) {
 		},
 	}
 
-	_, err := engine.Check(ctx, cfg, SafetyFlags{SkipDNSPreflight: true})
+	_, err := engine.Check(ctx, withAllowedHost(cfg, "127.0.0.1"), SafetyFlags{SkipDNSPreflight: true})
 	if err == nil {
 		t.Fatalf("expected error for 100MiB response body limit, got nil")
 	}
 	if !errors.Is(err, ErrSafetyCeilingExceeded) {
 		t.Errorf("expected ErrSafetyCeilingExceeded, got %v", err)
 	}
+}
+
+func withAllowedHost(cfg *config.Config, host string) *config.Config {
+	cfg.Safety.AllowedHosts = []string{host}
+	return cfg
 }

@@ -98,7 +98,7 @@ func FormatPlanSummary(p *Plan) string {
 	if len(p.AllowedHosts) > 0 {
 		sb.WriteString(fmt.Sprintf("Allowed Hosts:        %v\n", p.AllowedHosts))
 	} else {
-		sb.WriteString("Allowed Hosts:        <all hosts permitted>\n")
+		sb.WriteString("Allowed Hosts:        <none; no hosts authorized>\n")
 	}
 	sb.WriteString(fmt.Sprintf("Destructive Auth:     %v\n", p.AllowNonIdempotent))
 

@@ -18,13 +18,12 @@ import (
 
 // ScenarioExecutor executes sequential scenario steps for virtual users (§4, §7, §8).
 type ScenarioExecutor struct {
-	scenario      *CompiledScenario
-	transport     *http.Transport
-	allowedHosts  []string
-	clock         clock.Clock
-	classifier    core.OutcomeClassifier
-	checkRedirect func(req *http.Request, via []*http.Request) error
-	knownSecrets  []string
+	scenario     *CompiledScenario
+	transport    *http.Transport
+	allowedHosts []string
+	clock        clock.Clock
+	classifier   core.OutcomeClassifier
+	knownSecrets []string
 }
 
 // NewScenarioExecutor creates a configured ScenarioExecutor (§7, §8).
@@ -32,7 +31,6 @@ func NewScenarioExecutor(
 	scenario *CompiledScenario,
 	transport *http.Transport,
 	allowedHosts []string,
-	redirectPolicy string,
 	knownSecrets []string,
 	clk clock.Clock,
 ) *ScenarioExecutor {
@@ -43,44 +41,55 @@ func NewScenarioExecutor(
 		transport = executor.NewSharedTransport(executor.DefaultTransportOptions())
 	}
 
-	checkRedirect := func(req *http.Request, via []*http.Request) error {
+	return &ScenarioExecutor{
+		scenario:     scenario,
+		transport:    transport,
+		allowedHosts: append([]string(nil), allowedHosts...),
+		clock:        clk,
+		classifier:   core.NewOutcomeClassifier(),
+		knownSecrets: append([]string(nil), knownSecrets...),
+	}
+}
+
+func validateScenarioTarget(targetURL *url.URL, allowedHosts []string) error {
+	if targetURL == nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Host == "" {
+		return fmt.Errorf("scenario step target must be an absolute HTTP/HTTPS URL")
+	}
+	if !safety.IsHostAllowed(targetURL.Hostname(), allowedHosts) {
+		return fmt.Errorf("%w: scenario step target host is not allowlisted", safety.ErrHostNotAllowed)
+	}
+	return nil
+}
+
+func scenarioRedirectChecker(redirectPolicy string, allowedHosts []string) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) == 0 {
+			return fmt.Errorf("redirect refused without an originating request")
+		}
 		if len(via) >= safety.MaxRedirectHops {
 			return fmt.Errorf("stopped after %d redirects", safety.MaxRedirectHops)
 		}
 
+		// Empty or unknown policies fail closed. Valid compiled configurations
+		// always provide one of the explicit policies below.
 		switch redirectPolicy {
 		case core.RedirectPolicyNone:
 			return http.ErrUseLastResponse
-
 		case core.RedirectPolicySameOrigin:
-			initial := via[0].URL
-			if req.URL.Scheme != initial.Scheme || req.URL.Host != initial.Host {
-				return fmt.Errorf("%w: blocked redirect from %s to %s",
-					safety.ErrCrossOriginRedirectBlocked, initial.Host, req.URL.Host)
+			initialURL := via[0].URL
+			if req.URL.Scheme != initialURL.Scheme || req.URL.Host != initialURL.Host {
+				return fmt.Errorf("%w: blocked cross-origin scenario redirect", safety.ErrCrossOriginRedirectBlocked)
 			}
-
 		case core.RedirectPolicyAll:
-			targetHost := req.URL.Hostname()
-			if targetHost == "" {
-				targetHost = req.URL.Host
-			}
-			if !safety.IsHostAllowed(targetHost, allowedHosts) {
-				return fmt.Errorf("%w: redirect target host %q is not in allowed_hosts %v",
-					safety.ErrHostNotAllowed, targetHost, allowedHosts)
-			}
+			// Cross-origin redirects are permitted only after host authorization.
+		default:
+			return http.ErrUseLastResponse
 		}
 
+		if err := validateScenarioTarget(req.URL, allowedHosts); err != nil {
+			return fmt.Errorf("scenario redirect refused: %w", err)
+		}
 		return nil
-	}
-
-	return &ScenarioExecutor{
-		scenario:      scenario,
-		transport:     transport,
-		allowedHosts:  allowedHosts,
-		clock:         clk,
-		classifier:    core.NewOutcomeClassifier(),
-		checkRedirect: checkRedirect,
-		knownSecrets:  knownSecrets,
 	}
 }
 
@@ -138,6 +147,26 @@ func (e *ScenarioExecutor) ExecuteStep(ctx context.Context, state *VUState, step
 				Err:           parseErr,
 			},
 			ExtractErr: parseErr,
+			Succeeded:  false,
+		}, nil
+	}
+	if targetErr := validateScenarioTarget(parsedURL, e.allowedHosts); targetErr != nil {
+		completedAt := e.clock.Now()
+		scrubbedErr := config.RedactError(targetErr, e.knownSecrets)
+		outcome := e.classifier.Classify(core.ClassifyInput{
+			RequestBuildErr: true,
+			Err:             scrubbedErr,
+		})
+		return &StepResult{
+			StepName: step.Name,
+			Result: &executor.Result{
+				Outcome:       outcome,
+				Timestamps:    core.RequestTimestamps{ScheduledAt: scheduledAt, DispatchedAt: dispatchedAt, HeadersReceivedAt: completedAt, BodyCompletedAt: completedAt},
+				Latency:       completedAt.Sub(dispatchedAt),
+				TotalDuration: completedAt.Sub(scheduledAt),
+				Err:           scrubbedErr,
+			},
+			ExtractErr: scrubbedErr,
 			Succeeded:  false,
 		}, nil
 	}
@@ -219,7 +248,7 @@ func (e *ScenarioExecutor) ExecuteStep(ctx context.Context, state *VUState, step
 	// 3. Execute HTTP request with isolated VU CookieJar
 	client := &http.Client{
 		Transport:     e.transport,
-		CheckRedirect: e.checkRedirect,
+		CheckRedirect: scenarioRedirectChecker(step.RedirectPolicy, e.allowedHosts),
 	}
 	if state != nil && state.CookieJar != nil {
 		client.Jar = state.CookieJar

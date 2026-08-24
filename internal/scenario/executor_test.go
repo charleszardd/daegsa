@@ -112,7 +112,7 @@ func TestScenarioExecutor_ChainingAndExtraction(t *testing.T) {
 		},
 	}
 
-	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, "same-origin", nil, clock.NewRealClock())
+	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, nil, clock.NewRealClock())
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -217,7 +217,7 @@ func TestScenarioExecutor_OnFailurePolicies(t *testing.T) {
 				},
 			}
 
-			exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, "same-origin", nil, clock.NewRealClock())
+			exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, nil, clock.NewRealClock())
 			state := scenario.NewVUState(0, nil, nil)
 
 			var executedSteps []string
@@ -280,7 +280,7 @@ func TestScenarioExecutor_ExtractionErrorFailsStep(t *testing.T) {
 		},
 	}
 
-	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, "same-origin", nil, clock.NewRealClock())
+	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, nil, clock.NewRealClock())
 	state := scenario.NewVUState(0, nil, nil)
 
 	var recordedResult *scenario.StepResult

@@ -182,6 +182,9 @@ load:
 thresholds:
   p95: "<= 100ms"
   http_error_rate: "<= 1%"
+
+safety:
+  allowed_hosts: [127.0.0.1]
 `,
 		},
 		Telemetry: TelemetrySnapshot{

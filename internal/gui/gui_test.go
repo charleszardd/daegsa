@@ -55,6 +55,8 @@ load:
   rate: 50
   duration: 5s
   max_in_flight: 100
+safety:
+  allowed_hosts: [127.0.0.1]
 `
 
 	err := state.ValidateCurrentPlan(context.Background())

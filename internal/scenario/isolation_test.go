@@ -105,7 +105,7 @@ func TestScenarioIsolation_ConcurrentVUs(t *testing.T) {
 		},
 	}
 
-	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, "same-origin", nil, clock.NewRealClock())
+	exec := scenario.NewScenarioExecutor(sc, nil, []string{"127.0.0.1"}, nil, clock.NewRealClock())
 
 	var wg sync.WaitGroup
 	errorsChan := make(chan error, numVUs*iterationsPerVU)

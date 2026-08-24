@@ -16,7 +16,7 @@ DAEGSA employs a **defense-in-depth safety architecture** to ensure load tests c
 
 ## 2. Host Allowlisting (`safety.allowed_hosts`)
 
-To prevent misdirected traffic or accidental Denial of Service (DoS) against external third-party services, all target hosts must be explicitly listed in `safety.allowed_hosts`.
+To prevent misdirected traffic or accidental Denial of Service (DoS) against external third-party services, all target hosts must be explicitly authorized. YAML plans use `safety.allowed_hosts`; ad-hoc CLI runs use the repeatable `--allowed-host` flag. An empty allowlist authorizes no external host.
 
 ```yaml
 safety:
@@ -26,11 +26,21 @@ safety:
     - api.staging.internal
 ```
 
+For a CLI-only external run:
+
+```bash
+daegsa run --url https://api.staging.internal/items \
+  --allowed-host api.staging.internal \
+  --model open --rate 10 --duration 30s
+```
+
+Repeat `--allowed-host` for each exact hostname or IP used by the target, scenario steps, or permitted cross-origin redirects. CLI entries replace, rather than append to, YAML `safety.allowed_hosts`. CLI wildcard entries are rejected.
+
 ### Allowlist Evaluation Rules
 
-- **Exact Match:** Hostname in target URL must match an entry in `allowed_hosts`.
-- **Loopback Protection:** IP `127.0.0.1` and `localhost` are distinct entries. Both must be specified if testing against local endpoints.
-- **Port Independence:** `allowed_hosts` matches the host domain/IP; ports are resolved dynamically.
+- **Canonical Host Match:** DNS names are case-insensitive and a terminal dot is normalized. Entries contain only a DNS hostname or IP address—never a scheme, credentials, port, path, query, or fragment.
+- **Loopback Convenience:** CLI-only `--url` runs automatically authorize the explicit `localhost` or loopback IP literal in that URL. YAML plans still require their loopback hosts in `safety.allowed_hosts`.
+- **Port Independence:** Authorization matches the URL hostname or IP; the URL may still select a port.
 - **DNS Preflight Validation:** If a hostname cannot be resolved during preflight, DAEGSA exits immediately with exit code `4` (`SAFETY_REFUSAL`).
 
 ---
@@ -49,7 +59,7 @@ To execute `POST`, `PUT`, `PATCH`, or `DELETE`:
    ```
 2. When executing via CLI flags without a config file, supply `--allow-destructive`:
    ```bash
-   daegsa run --url https://api.staging.internal/items --method POST --allow-destructive
+   daegsa run --url https://api.staging.internal/items --allowed-host api.staging.internal --method POST --allow-destructive
    ```
 
 If a destructive method is requested without authorization, DAEGSA halts immediately:

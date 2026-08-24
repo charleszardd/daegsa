@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/charleszardd/daegsa/internal/core"
@@ -21,6 +22,7 @@ type CLIFlags struct {
 	MaxInFlight       int64
 	ResponseBodyLimit string
 	Redirects         string
+	AllowedHosts      []string
 	AllowDestructive  bool
 	DryRun            bool
 	NonInteractive    bool
@@ -89,6 +91,13 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 	if flags.Redirects != "" {
 		cfg.Request.Redirects = flags.Redirects
 	}
+	if flags.AllowedHosts != nil {
+		normalizedAllowedHosts, err := NormalizeAllowedHosts(flags.AllowedHosts, false)
+		if err != nil {
+			return fmt.Errorf("%w: invalid --allowed-host: %w", ErrConfigValidation, err)
+		}
+		cfg.Safety.AllowedHosts = append([]string(nil), normalizedAllowedHosts...)
+	}
 	if flags.AllowDestructive {
 		cfg.Safety.AllowNonIdempotent = true
 	}
@@ -120,5 +129,22 @@ func ApplyCLIOverrides(cfg *Config, flags *CLIFlags) error {
 		cfg.Load.Duration = Duration(10 * time.Second)
 	}
 
+	// Keep ad-hoc loopback runs convenient without turning an absent allowlist
+	// into blanket authorization for external targets.
+	if flags.ConfigFile == "" && flags.AllowedHosts == nil && len(cfg.Safety.AllowedHosts) == 0 {
+		if targetHost, ok := loopbackTargetHost(cfg.Request.URL); ok {
+			cfg.Safety.AllowedHosts = []string{targetHost}
+		}
+	}
+
 	return ValidateConfig(cfg)
+}
+
+func loopbackTargetHost(rawURL string) (string, bool) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || !IsLoopbackHost(parsedURL.Hostname()) {
+		return "", false
+	}
+	normalizedHost, err := NormalizeAllowedHost(parsedURL.Hostname(), false)
+	return normalizedHost, err == nil
 }

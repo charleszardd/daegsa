@@ -86,10 +86,10 @@ func FormatRootHelp(cmd *cobra.Command) string {
 	sb.WriteString(fmt.Sprintf("     %sdaegsa self-test%s\n\n", c.cyan, c.reset))
 
 	sb.WriteString(fmt.Sprintf("  %s3. Quick ad-hoc test (Open arrival model: 50 req/s for 15s):%s\n", c.dim, c.reset))
-	sb.WriteString(fmt.Sprintf("     %sdaegsa run --url \"https://api.example.com/items\" --model open --rate 50 --duration 15s%s\n\n", c.cyan, c.reset))
+	sb.WriteString(fmt.Sprintf("     %sdaegsa run --url \"https://api.example.com/items\" --allowed-host api.example.com --model open --rate 50 --duration 15s%s\n\n", c.cyan, c.reset))
 
 	sb.WriteString(fmt.Sprintf("  %s4. Concurrency test (Closed model: 10 Virtual Users with think time):%s\n", c.dim, c.reset))
-	sb.WriteString(fmt.Sprintf("     %sdaegsa run --url \"https://api.example.com/items\" --model closed --users 10 --duration 30s%s\n\n", c.cyan, c.reset))
+	sb.WriteString(fmt.Sprintf("     %sdaegsa run --url \"https://api.example.com/items\" --allowed-host api.example.com --model closed --users 10 --duration 30s%s\n\n", c.cyan, c.reset))
 
 	sb.WriteString(fmt.Sprintf("  %s5. Run from a declarative YAML config and save a JSON report:%s\n", c.dim, c.reset))
 	sb.WriteString(fmt.Sprintf("     %sdaegsa run --config examples/open-api-capacity.yaml --output-json report.json%s\n\n", c.cyan, c.reset))

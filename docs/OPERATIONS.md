@@ -70,8 +70,11 @@ Executes a load test against a target URL or using a YAML configuration file.
 # Run using configuration file
 daegsa run --config test-plan.yaml
 
-# Run using CLI flags
+# Run using CLI flags (loopback is authorized automatically for CLI-only runs)
 daegsa run --url http://127.0.0.1:8080/api/items --users 10 --duration 30s
+
+# External hosts require explicit, repeatable host-only authorization
+daegsa run --url https://api.staging.example.com/items --allowed-host api.staging.example.com --model open --rate 10 --duration 30s
 
 # Inspect compiled execution plan without generating traffic
 daegsa run --config test-plan.yaml --dry-run
@@ -90,6 +93,7 @@ daegsa run --config test-plan.yaml --output-json report.json
 - `--duration, -d`: Test duration (e.g. `30s`, `5m`).
 - `--think-time`: Pause between requests per VU (e.g. `50ms`).
 - `--max-in-flight`: Maximum concurrent in-flight requests (Open model).
+- `--allowed-host`: Authorize one exact external hostname or IP address; repeat the flag for multiple hosts. CLI values replace `safety.allowed_hosts` from YAML.
 - `--output-json, -o`: File path to save the JSON execution report.
 - `--dry-run`: Validate configuration and display execution plan without sending traffic.
 - `--allow-destructive`: Explicitly authorize non-idempotent HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`).

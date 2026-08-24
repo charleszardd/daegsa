@@ -21,6 +21,7 @@ type flagValues struct {
 	maxInFlight       int64
 	responseBodyLimit string
 	redirects         string
+	allowedHosts      []string
 	allowDestructive  bool
 	dryRun            bool
 	nonInteractive    bool
@@ -40,6 +41,7 @@ func addCommonFlags(fs *pflag.FlagSet, f *flagValues) {
 	fs.Int64Var(&f.maxInFlight, "max-in-flight", 0, "Maximum concurrent in-flight requests (open model)")
 	fs.StringVar(&f.responseBodyLimit, "response-body-limit", "", "Response body read limit (e.g. 1MiB, 500KB)")
 	fs.StringVar(&f.redirects, "redirects", "", "Redirect policy ('same-origin', 'none', 'all')")
+	fs.StringArrayVar(&f.allowedHosts, "allowed-host", nil, "Authorize an exact target hostname or IP address (repeatable)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "Print sanitized execution plan without sending test traffic")
 	fs.BoolVar(&f.nonInteractive, "non-interactive", false, "Disable interactive prompts (CI mode)")
 	fs.BoolVar(&f.allowDestructive, "allow-destructive", false, "Authorize non-idempotent HTTP methods (POST, PUT, PATCH, DELETE)")
@@ -47,6 +49,10 @@ func addCommonFlags(fs *pflag.FlagSet, f *flagValues) {
 }
 
 func (f *flagValues) toCLIFlags() *config.CLIFlags {
+	allowedHosts := append([]string(nil), f.allowedHosts...)
+	if f.allowedHosts == nil {
+		allowedHosts = nil
+	}
 	return &config.CLIFlags{
 		ConfigFile:        f.configFile,
 		URL:               f.url,
@@ -60,6 +66,7 @@ func (f *flagValues) toCLIFlags() *config.CLIFlags {
 		MaxInFlight:       f.maxInFlight,
 		ResponseBodyLimit: f.responseBodyLimit,
 		Redirects:         f.redirects,
+		AllowedHosts:      allowedHosts,
 		AllowDestructive:  f.allowDestructive,
 		DryRun:            f.dryRun,
 		NonInteractive:    f.nonInteractive,

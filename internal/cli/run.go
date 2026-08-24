@@ -28,10 +28,10 @@ Supports both Open Arrival-Rate (fixed RPS arrival pacing) and Closed VU Concurr
 (virtual users with think time) models, multi-step scenario workflows, profile ramps,
 and automated threshold validation with rich terminal and JSON reporting.`,
 		Example: `  # 1. Open arrival-rate test (50 req/sec for 30s):
-  daegsa run --url "https://api.example.com/items" --model open --rate 50 --duration 30s
+  daegsa run --url "https://api.example.com/items" --allowed-host api.example.com --model open --rate 50 --duration 30s
 
   # 2. Closed concurrency test (10 Virtual Users for 1m with 50ms think time):
-  daegsa run --url "https://api.example.com/items" --model closed --users 10 --duration 1m
+  daegsa run --url "https://api.example.com/items" --allowed-host api.example.com --model closed --users 10 --duration 1m
 
   # 3. Declarative YAML load test with JSON report output:
   daegsa run --config examples/open-api-capacity.yaml --output-json result.json
@@ -43,7 +43,7 @@ and automated threshold validation with rich terminal and JSON reporting.`,
   daegsa run --config examples/open-api-capacity.yaml --dry-run
 
   # 6. Authorize non-idempotent/destructive HTTP methods (POST, PUT, DELETE):
-  daegsa run --url "https://api.example.com/items" --method POST --allow-destructive --model open --rate 10 --duration 10s`,
+  daegsa run --url "https://api.example.com/items" --allowed-host api.example.com --method POST --allow-destructive --model open --rate 10 --duration 10s`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _, p, err := loadAndPreflightConfig(cmd.Context(), &flags)
 			if err != nil {

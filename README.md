@@ -66,6 +66,9 @@ daegsa validate --config examples/open-api-capacity.yaml
 # Execute load test with JSON report output
 daegsa run --config examples/open-api-capacity.yaml --output-json result.json
 
+# Run directly against an explicitly authorized external host
+daegsa run --url https://api.staging.example.com/items --allowed-host api.staging.example.com --model open --rate 10 --duration 30s
+
 # Compare baseline vs candidate reports for performance regressions
 daegsa compare baseline.json candidate.json
 ```

@@ -116,6 +116,13 @@ func ValidateConfig(cfg *Config) error {
 		return err
 	}
 
+	// 7. Safety allowlist validation & normalization
+	normalizedAllowedHosts, err := NormalizeAllowedHosts(cfg.Safety.AllowedHosts, true)
+	if err != nil {
+		return fmt.Errorf("%w: invalid safety.allowed_hosts: %w", ErrConfigValidation, err)
+	}
+	cfg.Safety.AllowedHosts = normalizedAllowedHosts
+
 	return nil
 }
 

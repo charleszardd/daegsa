@@ -27,7 +27,7 @@ without sending any test traffic.`,
   daegsa validate --config examples/open-api-capacity.yaml --rate 200 --duration 1m
 
   # 3. Validate ad-hoc command line parameters:
-  daegsa validate --url "https://api.example.com/items" --model open --rate 50 --duration 30s`,
+  daegsa validate --url "https://api.example.com/items" --allowed-host api.example.com --model open --rate 50 --duration 30s`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _, p, err := loadAndPreflightConfig(cmd.Context(), &flags)
 			if err != nil {

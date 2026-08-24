@@ -75,7 +75,6 @@ func NewClosedScheduler(p *plan.Plan, exec *executor.HTTPExecutor, clk clock.Clo
 			p.Scenario,
 			exec.Transport(),
 			p.AllowedHosts,
-			p.RedirectPolicy,
 			p.KnownSecrets,
 			clk,
 		)

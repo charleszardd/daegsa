@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/charleszardd/daegsa/internal/config"
 )
 
 // Hard safety ceiling constants (§12).
@@ -51,33 +53,29 @@ func IsDestructiveMethod(method string) bool {
 // Supports exact matching (e.g. "api.example.com") and wildcard prefix matching (e.g. "*.example.com").
 func IsHostAllowed(host string, allowedHosts []string) bool {
 	if len(allowedHosts) == 0 {
-		return true
+		return false
 	}
 
-	host = strings.ToLower(strings.TrimSpace(host))
-	// Strip port if present
-	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
-		// Ensure it's not an unbracketed IPv6 address
-		if !strings.Contains(host, "[") && strings.Count(host, ":") == 1 {
-			host = host[:colonIdx]
-		}
+	normalizedHost, err := config.NormalizeAllowedHost(host, false)
+	if err != nil {
+		return false
 	}
 
 	for _, pattern := range allowedHosts {
-		pat := strings.ToLower(strings.TrimSpace(pattern))
-		if pat == "" {
+		normalizedPattern, normalizeErr := config.NormalizeAllowedHost(pattern, true)
+		if normalizeErr != nil {
 			continue
 		}
 
 		// Exact match
-		if pat == host {
+		if normalizedPattern == normalizedHost {
 			return true
 		}
 
 		// Wildcard domain match: e.g. *.example.com matches sub.example.com
-		if strings.HasPrefix(pat, "*.") {
-			domain := pat[2:]
-			if host == domain || strings.HasSuffix(host, pat[1:]) {
+		if strings.HasPrefix(normalizedPattern, "*.") {
+			domain := normalizedPattern[2:]
+			if normalizedHost == domain || strings.HasSuffix(normalizedHost, normalizedPattern[1:]) {
 				return true
 			}
 		}
